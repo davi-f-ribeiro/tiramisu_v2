@@ -1036,3 +1036,88 @@ func TestMovieDetailSortTitle(t *testing.T) {
 		t.Errorf("status = %q, want released", movie.Status)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 12. Fallback de IDs externos para evitar UNIQUE constraint no Bazarr
+// ---------------------------------------------------------------------------
+
+func TestMovieTmdbIdFallbackDistinct(t *testing.T) {
+	// Cria dois filmes SEM TmdbID explícito (zero).
+	store := newMockStore()
+	store.movies[10] = &RadarrMovie{ID: 10, Title: "Movie NoTMDB", Year: 2020, Path: "/data/movies/movie-no-tmdb.mkv", TmdbID: 0}
+	store.movies[11] = &RadarrMovie{ID: 11, Title: "Movie AlsoNoTMDB", Year: 2021, Path: "/data/movies/movie-also-no-tmdb.mkv", TmdbID: 0}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movies []*RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movies); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(movies) != 2 {
+		t.Fatalf("got %d movies, want 2", len(movies))
+	}
+
+	tmdbMap := make(map[int64]bool)
+	for _, m := range movies {
+		if m.TmdbID <= 0 {
+			t.Errorf("movie %q: tmdbId = %d, deve ser > 0 (fallback para ID interno)", m.Title, m.TmdbID)
+		}
+		if tmdbMap[m.TmdbID] {
+			t.Errorf("duplicação: tmdbId = %d compartilhado entre filmes — causará UNIQUE constraint no Bazarr", m.TmdbID)
+		}
+		tmdbMap[m.TmdbID] = true
+	}
+	if len(tmdbMap) != 2 {
+		t.Errorf("tmdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tmdbMap))
+	}
+}
+
+func TestSeriesTvdbIdFallbackDistinct(t *testing.T) {
+	store := newMockStore()
+	store.series[30] = &SonarrSeries{ID: 30, Title: "Show NoTvdb", TvdbID: 0, Path: "/data/shows/no-tvdb"}
+	store.series[31] = &SonarrSeries{ID: 31, Title: "Show AlsoNoTvdb", TvdbID: 0, Path: "/data/shows/also-no-tvdb"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var series []*SonarrSeries
+	if err := json.Unmarshal(w.Body.Bytes(), &series); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(series) != 2 {
+		t.Fatalf("got %d series, want 2", len(series))
+	}
+
+	tvdbMap := make(map[int64]bool)
+	for _, s := range series {
+		if s.TvdbID <= 0 {
+			t.Errorf("series %q: tvdbId = %d, deve ser > 0 (fallback para ID interno)", s.Title, s.TvdbID)
+		}
+		if tvdbMap[s.TvdbID] {
+			t.Errorf("duplicação: tvdbId = %d compartilhado entre séries", s.TvdbID)
+		}
+		tvdbMap[s.TvdbID] = true
+	}
+	if len(tvdbMap) != 2 {
+		t.Errorf("tvdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tvdbMap))
+	}
+}

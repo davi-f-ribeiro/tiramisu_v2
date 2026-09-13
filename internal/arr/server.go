@@ -499,6 +499,12 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 		m.IsAvailable = true
 		m.Monitored = true
 
+		// Fallback: if external ID is zero Bazarr treats duplicates as unique,
+		// causing UNIQUE constraint errors in table_movies.tmdbId.
+		if m.TmdbID <= 0 {
+			m.TmdbID = m.ID
+		}
+
 		// Compute title fields Bazarr requires.
 		cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
 		m.SortTitle = strings.ToLower(cleanTitle)
@@ -547,6 +553,9 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 	movie.HasFile = true
 	movie.IsAvailable = true
 	movie.Monitored = true
+	if movie.TmdbID <= 0 {
+		movie.TmdbID = movie.ID
+	}
 	cleanTitle := strings.ReplaceAll(movie.Title, "_", " ")
 	movie.SortTitle = strings.ToLower(cleanTitle)
 	movie.CleanTitle = cleanTitle
@@ -579,6 +588,11 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	if series == nil {
 		series = []*SonarrSeries{}
 	}
+	for _, s := range series {
+		if s.TvdbID <= 0 {
+			s.TvdbID = s.ID
+		}
+	}
 	jsonResponse(w, http.StatusOK, series)
 }
 
@@ -600,6 +614,9 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if series.TvdbID <= 0 {
+		series.TvdbID = series.ID
 	}
 	jsonResponse(w, http.StatusOK, series)
 }
