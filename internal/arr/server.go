@@ -217,6 +217,7 @@ type Handler struct {
 	moviesDir   string
 	tvDir       string
 	logger      *log.Logger
+	resolver    *TMDBResolver // optional: JIT resolve tmdb_id from imdb_id
 }
 
 // NewHandler creates a new Handler with the given store and optional app name override.
@@ -259,6 +260,11 @@ func WithLogger(l *log.Logger) HandlerOption {
 // WithStoreWriter sets the MediaStoreWriter for backfill operations.
 func WithStoreWriter(w MediaStoreWriter) HandlerOption {
 	return func(h *Handler) { h.storeWriter = w }
+}
+
+// WithResolver sets the TMDB resolver for JIT resolution of missing IDs.
+func WithResolver(r *TMDBResolver) HandlerOption {
+	return func(h *Handler) { h.resolver = r }
 }
 
 // RegisterRoutes mounts all API routes on the given ServeMux.
@@ -486,13 +492,24 @@ func (h *Handler) handleTag(w http.ResponseWriter, r *http.Request) {
 // Uniqueness guard: when tmdbId is absent (≤ 0) we fall back to the
 // internal arr_media.id so Bazarr never sees duplicate zero values that
 // trigger UNIQUE constraint failures.
-func (h *Handler) populateMovieFields(m *RadarrMovie) {
+func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 	if m == nil {
 		return
 	}
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
+
+	// JIT resolution: if tmdbId is zero and we have an imdbId, try to
+	// resolve it synchronously from the TMDb API (with in-memory cache).
+	if m.TmdbID <= 0 && m.ImdbID != "" && h.resolver != nil {
+		if tmdbID, releaseDate, err := h.resolver.ResolveIMDbID(ctx, m.ImdbID); err == nil && tmdbID > 0 {
+			m.TmdbID = tmdbID
+			if m.Year == 0 {
+				m.Year = extractYearFrom(releaseDate)
+			}
+		}
+	}
 
 	// Uniqueness fallback for Bazarr: tmdbId=0 would collide across
 	// multiple stubs. When absent, use the unique internal ID instead.
@@ -543,7 +560,7 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 		movies = []*RadarrMovie{}
 	}
 	for _, m := range movies {
-		h.populateMovieFields(m)
+		h.populateMovieFields(ctx, m)
 	}
 	jsonResponse(w, http.StatusOK, movies)
 }
@@ -567,7 +584,7 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.populateMovieFields(movie)
+	h.populateMovieFields(ctx, movie)
 	jsonResponse(w, http.StatusOK, movie)
 }
 
@@ -581,9 +598,16 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	if series == nil {
 		series = []*SonarrSeries{}
 	}
-	// Uniqueness fallback for Bazarr: tvdbId=0 would collide across
-	// multiple stubs. When absent, use the unique internal ID instead.
+	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
+	// resolve it synchronously from the TMDb API (with in-memory cache).
 	for _, s := range series {
+		if s.TvdbID <= 0 && s.ImdbID != "" && h.resolver != nil {
+			if tmdbID, _, err := h.resolver.ResolveIMDbID(ctx, s.ImdbID); err == nil && tmdbID > 0 {
+				s.TvdbID = tmdbID
+			}
+		}
+		// Uniqueness fallback for Bazarr: tvdbId=0 would collide across
+		// multiple stubs. When absent, use the unique internal ID instead.
 		if s.TvdbID <= 0 {
 			s.TvdbID = s.ID
 		}
@@ -609,6 +633,13 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
+	// resolve it synchronously from the TMDb API (with in-memory cache).
+	if series.TvdbID <= 0 && series.ImdbID != "" && h.resolver != nil {
+		if tmdbID, _, err := h.resolver.ResolveIMDbID(ctx, series.ImdbID); err == nil && tmdbID > 0 {
+			series.TvdbID = tmdbID
+		}
 	}
 	// Uniqueness fallback for Bazarr: tvdbId=0 uses unique internal ID.
 	if series.TvdbID <= 0 {

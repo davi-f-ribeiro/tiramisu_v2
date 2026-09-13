@@ -189,3 +189,52 @@ func extractYearFrom(date string) int {
 	}
 	return 0
 }
+
+
+// ResolveIMDbID synchronously resolves an IMDb ID to a TMDB ID using the
+// in-memory cache. If not cached, it queries the TMDb API directly.
+// Returns (tmdbID, releaseDate, error). tmdbID=0 means resolution failed.
+func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (int64, string, error) {
+	// 1. Fast path: check cache.
+	if entry, ok := r.cache.Load(imdbID); ok {
+		e := entry.(*resolveCacheEntry)
+		if time.Now().Before(e.expiresAt) {
+			return e.tmdbID, e.releaseDate, nil
+		}
+		r.cache.Delete(imdbID)
+	}
+
+	// 2. Slow path: query TMDb with retries.
+	var tmdbID int64
+	var releaseDate string
+	var lastErr error
+
+	for attempt := 0; attempt < r.config.MaxRetry; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return 0, "", ctx.Err()
+			case <-time.After(r.config.RetryDelay * time.Duration(attempt)):
+			}
+		}
+		tmdbID, releaseDate, lastErr = r.config.Client.FindByIMDbID(ctx, imdbID)
+		if lastErr == nil {
+			break
+		}
+	}
+	if lastErr != nil {
+		if r.config.Logger != nil {
+			r.config.Logger.Printf("[TMDB resolver JIT] failed %s after %d attempts: %v", imdbID, r.config.MaxRetry, lastErr)
+		}
+		return 0, "", lastErr
+	}
+
+	// 3. Cache the result for 1h.
+	r.cache.Store(imdbID, &resolveCacheEntry{
+		tmdbID:      tmdbID,
+		releaseDate: releaseDate,
+		expiresAt:   time.Now().Add(1 * time.Hour),
+	})
+
+	return tmdbID, releaseDate, nil
+}

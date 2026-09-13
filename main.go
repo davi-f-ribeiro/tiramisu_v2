@@ -4353,16 +4353,30 @@ func main() {
 	// ARR Virtual Catalog: register Servarr v3 API routes on the default mux,
 	// launch dedicated :7878 (:radarr) and :8989 (:sonarr) listeners, and start
 	// an async backfill so pre-existing stubs appear in the catalog.
+	var tmdbResolver *arr.TMDBResolver
+	if cfg.TMDBAPIKey != "" && stateDB != nil {
+		tmdbResolver = arr.NewTMDBResolver(&arr.ResolveConfig{
+			Client:     tmdbpkg.NewClient(cfg.TMDBAPIKey),
+			DB:         stateDB,
+			Logger:     logger,
+			MaxRetry:   3,
+			RetryDelay: 2 * time.Second,
+		})
+	}
+
 	if stateDB != nil {
 		moviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
 		tvDir := filepath.Join(gc().PhysicalSourcePath, "tv")
 		arrStore := arr.NewDBStore(stateDB.SQL())
-		arrHandler := arr.NewHandler(
-			arrStore,
+		opts := []arr.HandlerOption{
 			arr.WithStoreWriter(arrStore),
 			arr.WithDirs(moviesDir, tvDir),
 			arr.WithLogger(logger),
-		)
+		}
+		if tmdbResolver != nil {
+			opts = append(opts, arr.WithResolver(tmdbResolver))
+		}
+		arrHandler := arr.NewHandler(arrStore, opts...)
 		arrHandler.RegisterRoutes(http.DefaultServeMux)
 
 		// Derive a cancellable context for ARR listeners; cancelled when
@@ -4388,17 +4402,10 @@ func main() {
 				stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
 		}
 
-		// Start TMDB metadata resolver in background to populate missing
-		// tmdb_id / year for records that have an imdb_id but no tmdb_id.
-		if cfg.TMDBAPIKey != "" && stateDB != nil {
-			resolver := arr.NewTMDBResolver(&arr.ResolveConfig{
-				Client:    tmdbpkg.NewClient(cfg.TMDBAPIKey),
-				DB:        stateDB,
-				Logger:    logger,
-				MaxRetry:  3,
-				RetryDelay: 2 * time.Second,
-			})
-			resolver.Run(arrCtx)
+		// Start background TMDB resolver to periodically update missing
+		// tmdb_id / year records using the same shared in-memory cache.
+		if tmdbResolver != nil {
+			tmdbResolver.Run(arrCtx)
 		}
 	}
 
