@@ -934,6 +934,8 @@ type PhysicalFileNode struct {
 // Compile-time interface checks for PhysicalFileNode
 var _ fs.NodeGetattrer = (*PhysicalFileNode)(nil)
 var _ fs.NodeOpener = (*PhysicalFileNode)(nil)
+var _ fs.FileReader = (*physicalFileHandle)(nil)
+var _ fs.FileReleaser = (*physicalFileHandle)(nil)
 
 func (n *PhysicalFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	st := syscall.Stat_t{}
@@ -951,7 +953,7 @@ type physicalFileHandle struct {
 	file *os.File
 }
 
-func (h *physicalFileHandle) Read(dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (h *physicalFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n, err := h.file.ReadAt(dest, off)
 	if err != nil {
 		return nil, vfs.ToErrno(err)
@@ -959,8 +961,9 @@ func (h *physicalFileHandle) Read(dest []byte, off int64) (fuse.ReadResult, sysc
 	return fuse.ReadResultData(dest[:n]), 0
 }
 
-func (h *physicalFileHandle) Release() {
+func (h *physicalFileHandle) Release(ctx context.Context) syscall.Errno {
 	h.file.Close()
+	return 0
 }
 
 func (n *PhysicalFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {

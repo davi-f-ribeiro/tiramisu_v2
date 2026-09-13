@@ -57,6 +57,10 @@ func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 		m.HasFile = true
 		m.IsAvailable = true
 		m.Monitored = true
+		m.AlternativeTitles = []AlternativeTitle{}
+		m.Genres = []string{}
+		m.Tags = []int{}
+		m.Images = []MediaImage{}
 		movies = append(movies, &m)
 	}
 	return movies, rows.Err()
@@ -77,6 +81,10 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
+	m.AlternativeTitles = []AlternativeTitle{}
+	m.Genres = []string{}
+	m.Tags = []int{}
+	m.Images = []MediaImage{}
 	return &m, nil
 }
 
@@ -143,6 +151,10 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 			return nil, fmt.Errorf("arr: scan series: %w", err)
 		}
 		s.Monitored = true
+		s.AlternativeTitles = []AlternativeTitle{}
+		s.Genres = []string{}
+		s.Tags = []int{}
+		s.Images = []MediaImage{}
 		series = append(series, &s)
 	}
 	return series, rows.Err()
@@ -160,6 +172,12 @@ func (s *DBStore) GetSeriesByID(ctx context.Context, id int64) (*SonarrSeries, e
 		return nil, err
 	}
 	series.Monitored = true
+	series.AlternativeTitles = []AlternativeTitle{}
+	series.Genres = []string{}
+	series.Tags = []int{}
+	series.Images = []MediaImage{}
+	series.SeasonCount = 1
+	series.Seasons = []SonarrSeason{{SeasonNumber: 1, Monitored: true}}
 	return &series, nil
 }
 
@@ -503,6 +521,9 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
+	m.AlternativeTitles = []AlternativeTitle{}
+	m.Genres = []string{}
+	m.Tags = []int{}
 
 	// JIT resolution: if tmdbId is zero and we have an imdbId, try to
 	// resolve it synchronously from the TMDb API (with in-memory cache).
@@ -660,6 +681,12 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
 	// resolve it synchronously from the TMDb API (with in-memory cache).
 	for _, s := range series {
+		// Ensure all arrays are never null (Bazarr requires [] not None)
+		s.AlternativeTitles = []AlternativeTitle{}
+		s.Genres = []string{}
+		s.Tags = []int{}
+		s.SeasonCount = 1
+		s.Seasons = []SonarrSeason{{SeasonNumber: 1, Monitored: true}}
 		if s.TvdbID <= 0 && s.ImdbID != "" && h.resolver != nil {
 			if res, err := h.resolver.ResolveIMDbID(ctx, s.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
 				s.TvdbID = res.TmdbID

@@ -53,41 +53,65 @@ type RadarrMovieFile struct {
 	QualityCutoffNot bool         `json:"qualityCutoffNotMet"`
 }
 
+// AlternativeTitle mirrors Servarr's alternative title response.
+type AlternativeTitle struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+}
+
 // RadarrMovie mirrors Radarr's movie response.
 type RadarrMovie struct {
-	ID              int64             `json:"id"`
-	Title           string            `json:"title"`
-	OriginalTitle   string            `json:"originalTitle"`
-	RawTitle        string            `json:"rawTitle,omitempty"`
-	SortTitle       string            `json:"sortTitle"`
-	CleanTitle      string            `json:"cleanTitle"`
-	TitleSlug       string            `json:"titleSlug"`
-	Status          string            `json:"status"`
-	Year            int               `json:"year"`
-	Path            string            `json:"path"`
-	Monitored       bool              `json:"monitored"`
-	HasFile         bool              `json:"hasFile"`
-	IsAvailable     bool              `json:"isAvailable"`
-	ImdbID          string            `json:"imdbId"`
-	TmdbID          int64             `json:"tmdbId"`
-	Size            int64             `json:"size,omitempty"`
-	MovieFile       *RadarrMovieFile  `json:"movieFile,omitempty"`
-	Images          []MediaImage      `json:"images,omitempty"`
-	PosterPath      string            `json:"-"`
-	BackdropPath    string            `json:"-"`
+	ID                int64              `json:"id"`
+	Title             string             `json:"title"`
+	OriginalTitle     string             `json:"originalTitle"`
+	RawTitle          string             `json:"rawTitle,omitempty"`
+	SortTitle         string             `json:"sortTitle"`
+	CleanTitle        string             `json:"cleanTitle"`
+	TitleSlug         string             `json:"titleSlug"`
+	Status            string             `json:"status"`
+	Year              int                `json:"year"`
+	Path              string             `json:"path"`
+	Monitored         bool               `json:"monitored"`
+	HasFile           bool               `json:"hasFile"`
+	IsAvailable       bool               `json:"isAvailable"`
+	ImdbID            string             `json:"imdbId"`
+	TmdbID            int64              `json:"tmdbId"`
+	Size              int64              `json:"size,omitempty"`
+	MovieFile         *RadarrMovieFile   `json:"movieFile,omitempty"`
+	AlternativeTitles []AlternativeTitle `json:"alternativeTitles"`
+	Genres            []string           `json:"genres"`
+	Tags              []int              `json:"tags"`
+	Images            []MediaImage       `json:"images"`
+	PosterPath        string             `json:"-"`
+	BackdropPath      string             `json:"-"`
 }
 
 // SonarrSeries mirrors Sonarr's series response.
 type SonarrSeries struct {
-	ID           int64        `json:"id"`
-	Title        string       `json:"title"`
-	Path         string       `json:"path"`
-	Monitored    bool         `json:"monitored"`
-	TvdbID       int64        `json:"tvdbId"`
-	ImdbID       string       `json:"imdbId"`
-	Images       []MediaImage `json:"images,omitempty"`
-	PosterPath   string       `json:"-"`
-	BackdropPath string       `json:"-"`
+	ID                int64              `json:"id"`
+	Title             string             `json:"title"`
+	OriginalTitle     string             `json:"originalTitle"`
+	SortTitle         string             `json:"sortTitle"`
+	SeasonCount       int                `json:"seasonCount"`
+	Year              int                `json:"year"`
+	Path              string             `json:"path"`
+	Monitored         bool               `json:"monitored"`
+	TvdbID            int64              `json:"tvdbId"`
+	ImdbID            string             `json:"imdbId"`
+	TmdbID            int64              `json:"tmdbId"`
+	Seasons           []SonarrSeason     `json:"seasons"`
+	AlternativeTitles []AlternativeTitle `json:"alternativeTitles"`
+	Genres            []string           `json:"genres"`
+	Tags              []int              `json:"tags"`
+	Images            []MediaImage       `json:"images"`
+	PosterPath        string             `json:"-"`
+	BackdropPath      string             `json:"-"`
+}
+
+// SonarrSeason mirrors Sonarr's season response.
+type SonarrSeason struct {
+	SeasonNumber int `json:"seasonNumber"`
+	Monitored    bool `json:"monitored"`
 }
 
 // MediaImage mirrors Servarr's cover image (poster or fanart/backdrop).
