@@ -305,6 +305,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	// Manual sync endpoints
 	mux.HandleFunc("POST /api/v3/arr/sync", h.handleManualSync)
 	mux.HandleFunc("POST /api/arr/sync", h.handleManualSync)
+
+	// SignalR Handshake/Negotiate (evita HubError no Bazarr)
+	mux.HandleFunc("/signalr/negotiate", h.handleSignalRNegotiate)
+	mux.HandleFunc("/signalr", h.handleSignalRNegotiate)
+
+	// Endpoints adicionais que o Bazarr consulta no sync
+	mux.HandleFunc("/api/v3/command", h.handleEmptyArray)
+	mux.HandleFunc("/api/v3/health", h.handleEmptyArray)
+	mux.HandleFunc("/api/v3/diskspace", h.handleEmptyArray)
 }
 
 // jsonResponse writes a JSON response with proper headers.
@@ -524,6 +533,28 @@ func (h *Handler) handleEpisodeFilesBySeries(w http.ResponseWriter, r *http.Requ
 		files = []*SonarrEpisodeFile{}
 	}
 	jsonResponse(w, http.StatusOK, files)
+}
+
+// handleSignalRNegotiate answers SignalR handshake requests so Bazarr doesn't log HubError.
+func (h *Handler) handleSignalRNegotiate(w http.ResponseWriter, r *http.Request) {
+	res := map[string]any{
+		"Url":                     "/signalr",
+		"ConnectionToken":         "tiramisu-dummy-token",
+		"ConnectionId":            "tiramisu-dummy-id",
+		"KeepAliveTimeout":        20.0,
+		"DisconnectTimeout":       30.0,
+		"ConnectionTimeout":       110.0,
+		"TryWebSockets":           false,
+		"ProtocolVersion":         "1.4",
+		"TransportConnectTimeout": 5.0,
+		"LongPollDelay":           0.0,
+	}
+	jsonResponse(w, http.StatusOK, res)
+}
+
+// handleEmptyArray responds with an empty JSON array for endpoints Bazarr queries.
+func (h *Handler) handleEmptyArray(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, []any{})
 }
 
 // arrServers holds references to the Radarr and Sonarr HTTP servers
