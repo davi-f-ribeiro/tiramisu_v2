@@ -18,10 +18,8 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Helper: create a real *metadb.DB in memory for the test
-// ---------------------------------------------------------------------------
-
-func newTestDB(t *testing.T) *metadb.DB {
+// Helper: create a real *metadb.DB in memory for the E2E test
+func newTestDBE2E(t *testing.T) *metadb.DB {
 	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -43,7 +41,7 @@ func newTestHandlerWithDB(t *testing.T, db *metadb.DB) *Handler {
 // ---------------------------------------------------------------------------
 
 func TestE2ERadarrSystemStatus(t *testing.T) {
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 	h := newTestHandlerWithDB(t, db)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -69,7 +67,7 @@ func TestE2ERadarrSystemStatus(t *testing.T) {
 }
 
 func TestE2ERadarrRootFolderQualityTagEmpty(t *testing.T) {
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 	h := newTestHandlerWithDB(t, db)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -90,7 +88,7 @@ func TestE2ERadarrRootFolderQualityTagEmpty(t *testing.T) {
 }
 
 func TestE2ERadarrMovieListAndDetail(t *testing.T) {
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 
 	// Insert a movie via direct SQL
 	_, err := db.SQL().ExecContext(context.Background(),
@@ -158,7 +156,7 @@ func TestE2ERadarrMovieListAndDetail(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2ESonarrSystemStatus(t *testing.T) {
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 	h := newTestHandlerWithDB(t, db)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -180,7 +178,7 @@ func TestE2ESonarrSystemStatus(t *testing.T) {
 }
 
 func TestE2ESonarrSeriesListAndDetail(t *testing.T) {
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 
 	// Insert a series via direct SQL
 	_, err := db.SQL().ExecContext(context.Background(),
@@ -235,7 +233,7 @@ func TestE2ESonarrSeriesListAndDetail(t *testing.T) {
 }
 
 func TestE2ESonarrEpisodesAndEpisodeFiles(t *testing.T) {
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 
 	// Insert series + episodes
 	_, err := db.SQL().ExecContext(context.Background(),
@@ -353,12 +351,19 @@ func TestE2EBuildAndBackfill(t *testing.T) {
 	}
 
 	// 2. Create in-memory metadb and run backfill
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 	store := NewDBStore(db.SQL())
 
 	logger := log.New(io.Discard, "", 0)
-	if err := RunBackfill(context.Background(), moviesDir, tvDir, store, logger); err != nil {
+	stats, err := RunBackfill(context.Background(), moviesDir, tvDir, store, logger)
+	if err != nil {
 		t.Fatalf("backfill error: %v", err)
+	}
+	if stats.MoviesIndexed != 1 {
+		t.Errorf("movies_indexed = %d, want 1", stats.MoviesIndexed)
+	}
+	if stats.EpisodesIndexed != 1 {
+		t.Errorf("episodes_indexed = %d, want 1", stats.EpisodesIndexed)
 	}
 
 	// 3. Verify movie appears in API
@@ -456,12 +461,16 @@ func TestE2EBuildBackfillSkipsNonStubs(t *testing.T) {
 		t.Fatalf("write non-stub: %v", err)
 	}
 
-	db := newTestDB(t)
+	db := newTestDBE2E(t)
 	store := NewDBStore(db.SQL())
 	logL := log.New(io.Discard, "", 0)
 
-	if err := RunBackfill(context.Background(), moviesDir, "", store, logL); err != nil {
+	stats, err := RunBackfill(context.Background(), moviesDir, "", store, logL)
+	if err != nil {
 		t.Fatalf("backfill: %v", err)
+	}
+	if stats.MoviesIndexed != 0 {
+		t.Errorf("movies_indexed = %d, want 0 (non-stub skipped)", stats.MoviesIndexed)
 	}
 
 	// Movie list should be empty

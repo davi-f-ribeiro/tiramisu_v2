@@ -10,7 +10,17 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// BackfillStats carries counters from a single RunBackfill invocation.
+type BackfillStats struct {
+	MoviesIndexed   int   `json:"movies_indexed"`
+	SeriesIndexed   int   `json:"series_indexed"`
+	EpisodesIndexed int   `json:"episodes_indexed"`
+	ErrorsCount     int   `json:"errors_count"`
+	DurationMs      int64 `json:"duration_ms"`
+}
 
 // stubMeta is the minimal subset of MkvJSON the backfill needs.
 type stubMeta struct {
@@ -35,33 +45,43 @@ type MediaStoreWriter interface {
 }
 
 var (
-	reSE = regexp.MustCompile(`[Ss](\d{1,3})[Ee](\d{1,3})`)
+	reSE          = regexp.MustCompile(`[Ss](\d{1,3})[Ee](\d{1,3})`)
+	reYearInTitle = regexp.MustCompile(`[(\s](19\d{2}|20[0-2]\d)[)]`)
 )
 
 // RunBackfill scans existing stub files on disk and populates arr_media.
-func RunBackfill(ctx context.Context, moviesDir, tvDir string, db MediaStoreWriter, logger *log.Logger) error {
+// Returns detailed stats and any accumulated error.
+func RunBackfill(ctx context.Context, moviesDir, tvDir string, db MediaStoreWriter, logger *log.Logger) (BackfillStats, error) {
+	start := time.Now()
+	var stats BackfillStats
+	var err error
+
 	if db == nil {
-		return nil
+		return stats, nil
 	}
 
-	var err error
 	if moviesDir != "" {
-		if e := backfillMovies(ctx, moviesDir, db, logger); e != nil && err == nil {
+		e := backfillMovies(ctx, moviesDir, db, logger, &stats)
+		if e != nil && err == nil {
 			err = fmt.Errorf("backfill movies: %w", e)
 		}
 	}
 	if tvDir != "" {
-		if e := backfillSeries(ctx, tvDir, db, logger); e != nil && err == nil {
+		e := backfillSeries(ctx, tvDir, db, logger, &stats)
+		if e != nil && err == nil {
 			err = fmt.Errorf("backfill series: %w", e)
 		}
 	}
 
+	stats.DurationMs = time.Since(start).Milliseconds()
 	if err != nil {
+		stats.ErrorsCount++
 		logger.Printf("[ARR backfill] completed with errors: %v", err)
 	} else {
-		logger.Printf("[ARR backfill] completed successfully")
+		logger.Printf("[ARR backfill] completed: %d movies, %d series, %d episodes (%dms)",
+			stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
 	}
-	return err
+	return stats, err
 }
 
 func parseStub(path string) (*stubMeta, error) {
@@ -84,7 +104,7 @@ func parseStub(path string) (*stubMeta, error) {
 	return &m, nil
 }
 
-func backfillMovies(ctx context.Context, dir string, db MediaStoreWriter, logger *log.Logger) error {
+func backfillMovies(ctx context.Context, dir string, db MediaStoreWriter, logger *log.Logger, stats *BackfillStats) error {
 	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		select {
 		case <-ctx.Done():
@@ -106,15 +126,27 @@ func backfillMovies(ctx context.Context, dir string, db MediaStoreWriter, logger
 		}
 		imdbID := meta.Imdb
 		year := meta.Year
+		tmdbID := meta.TMDBID
 
-		if err := db.UpsertARRMovie(ctx, int64(meta.TMDBID), imdbID, title, year, path, meta.Size); err != nil {
+		// Fallback: if no TMDB ID in JSON, try path
+		if tmdbID == 0 {
+			tmdbID = extractTMDBID(info.Name())
+		}
+		// Fallback: if no year in JSON, try filename
+		if year == 0 {
+			year = extractYear(info.Name())
+		}
+
+		if err := db.UpsertARRMovie(ctx, int64(tmdbID), imdbID, title, year, path, meta.Size); err != nil {
 			logger.Printf("[ARR backfill] movie %s: %v", filepath.Base(path), err)
+		} else {
+			stats.MoviesIndexed++
 		}
 		return nil
 	})
 }
 
-func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger *log.Logger) error {
+func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger *log.Logger, stats *BackfillStats) error {
 	type epInfo struct {
 		showDir string
 		season  int
@@ -199,8 +231,10 @@ func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger
 		id, err := db.UpsertARRSeries(ctx, 0, 0, imdbID, showName, sd)
 		if err != nil {
 			logger.Printf("[ARR backfill] series %s: %v", showName, err)
+			stats.ErrorsCount++
 			continue
 		}
+		stats.SeriesIndexed++
 		seriesList = append(seriesList, seriesEntry{id: id, showDir: sd})
 	}
 
@@ -225,8 +259,32 @@ func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger
 
 		if err := db.UpsertARREpisode(ctx, found.id, ep.season, ep.ep, ep.title, ep.path, ep.size); err != nil {
 			logger.Printf("[ARR backfill] episode %s: %v", filepath.Base(ep.path), err)
+			stats.ErrorsCount++
+		} else {
+			stats.EpisodesIndexed++
 		}
 	}
 
 	return nil
+}
+
+func extractTMDBID(filename string) int {
+	re := regexp.MustCompile(`[Tt]mdb[ _]?(\d+)`)
+	matches := re.FindStringSubmatch(filename)
+	if len(matches) >= 2 {
+		if id, err := strconv.Atoi(matches[1]); err == nil {
+			return id
+		}
+	}
+	return 0
+}
+
+func extractYear(filename string) int {
+	matches := reYearInTitle.FindStringSubmatch(filename)
+	if len(matches) >= 2 {
+		if year, err := strconv.Atoi(matches[1]); err == nil {
+			return year
+		}
+	}
+	return 0
 }

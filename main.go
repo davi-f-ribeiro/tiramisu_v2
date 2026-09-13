@@ -4089,7 +4089,9 @@ func main() {
 	checkHardwareSupport()
 
 	var dbPath string
+	var arrBackfill bool
 	flag.StringVar(&dbPath, "path", "", "path to database and config")
+	flag.BoolVar(&arrBackfill, "arr-backfill", false, "run ARR stub backfill and exit")
 	flag.Parse()
 
 	// Default --path to the directory containing the binary (portable install)
@@ -4111,6 +4113,41 @@ func main() {
 		// lost on "docker rm". Migrate anything already written there before switching.
 		settings.Path = dbPath
 		settings.MigrateFromWorkdir(dbPath)
+	}
+
+	// --arr-backfill: run stub backfill stand-alone and exit
+	if arrBackfill {
+		cfg := config.LoadConfig()
+		physicalSource := cfg.PhysicalSourcePath
+		if physicalSource == "" {
+			fmt.Fprintln(os.Stderr, "ERROR: cannot determine PhysicalSourcePath — set --path or config")
+			os.Exit(1)
+		}
+		moviesDir := filepath.Join(physicalSource, "movies")
+		tvDir := filepath.Join(physicalSource, "tv")
+
+		standaloneLogger := log.New(os.Stderr, "[ARR backfill] ", 0)
+
+		// Create a minimal in-memory DB for the backfill
+		tmpDB, err := metadb.New("", nil)
+		if err != nil {
+			standaloneLogger.Printf("FAIL: metadb: %v", err)
+			os.Exit(1)
+		}
+		defer tmpDB.Close()
+
+		store := arr.NewDBStore(tmpDB.SQL())
+		stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, store, standaloneLogger)
+		if err != nil {
+			standaloneLogger.Printf("FAIL: %v", err)
+		}
+		standaloneLogger.Printf("DONE: %d movies, %d series, %d episodes (%dms)",
+			stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
+
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}
 
 	source, mount := flag.Arg(0), flag.Arg(1)
@@ -4310,8 +4347,15 @@ func main() {
 	// launch dedicated :7878 (:radarr) and :8989 (:sonarr) listeners, and start
 	// an async backfill so pre-existing stubs appear in the catalog.
 	if stateDB != nil {
+		moviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
+		tvDir := filepath.Join(gc().PhysicalSourcePath, "tv")
 		arrStore := arr.NewDBStore(stateDB.SQL())
-		arrHandler := arr.NewHandler(arrStore)
+		arrHandler := arr.NewHandler(
+			arrStore,
+			arr.WithStoreWriter(arrStore),
+			arr.WithDirs(moviesDir, tvDir),
+			arr.WithLogger(logger),
+		)
 		arrHandler.RegisterRoutes(http.DefaultServeMux)
 
 		// Derive a cancellable context for ARR listeners; cancelled when
@@ -4326,11 +4370,13 @@ func main() {
 		logger.Printf("[ARR] Radarr/Sonarr API v3 facade active (ports :7878/:8989)")
 
 		// Async backfill: catalog pre-existing stubs in background
-		moviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
-		tvDir := filepath.Join(gc().PhysicalSourcePath, "tv")
 		go func() {
-			if err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger); err != nil {
+			stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger)
+			if err != nil {
 				logger.Printf("[ARR] backfill error: %v", err)
+			} else {
+				logger.Printf("[ARR] backfill done: %d movies, %d series, %d eps (%dms)",
+					stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
 			}
 		}()
 	}
