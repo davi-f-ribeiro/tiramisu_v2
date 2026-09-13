@@ -950,6 +950,14 @@ func tryComputeSubDBHash(hash string, fileID int, fileSize int64) (string, bool)
 	return subprovider.ComputeSubDBHash(head, tail, fileSize), true
 }
 
+// videoHashShort returns a truncated hash for log display (first 12 hex chars).
+func videoHashShort(h string) string {
+	if len(h) > 12 {
+		return h[:12] + "…"
+	}
+	return h
+}
+
 func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if gc().LogLevel == "DEBUG" {
 		logger.Printf("=== OPEN VIRTUAL === path=%s", n.vMeta.Path)
@@ -1041,7 +1049,27 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			// SubDB hash: read first+last 64KB from warmup cache for real file hash.
 			// Falls back to "" (empty) if warmup still isn't ready — engine skips
 			// SubDB and relies on IMDB ID search via OpenSubtitles.
-			videoHash, _ := tryComputeSubDBHash(hashStr, urlFileIdx, n.vMeta.Size)
+			videoHash, hashReady := tryComputeSubDBHash(hashStr, urlFileIdx, n.vMeta.Size)
+
+			// ---- Bug 0 fix: async warmup retry when hash isn't ready at Open() ----
+			// If the warmup tail isn't ready yet, poll for up to 8s (8 attempts × 1s).
+			// This allows SubDB to run even on cold start, once the pump fills the tail.
+			if !hashReady && hashStr != "" && n.vMeta.Size >= 131072 && imdbID != "" {
+				const maxPollAttempts = 8
+				for attempt := 1; attempt <= maxPollAttempts; attempt++ {
+					time.Sleep(1 * time.Second)
+					videoHash, hashReady = tryComputeSubDBHash(hashStr, urlFileIdx, n.vMeta.Size)
+					if hashReady {
+						logger.Printf("[SUB] OPEN hook: warmup became ready after %ds, hash=%s (imdb=%s)",
+							attempt, videoHashShort(videoHash), imdbID)
+						break
+					}
+					if attempt == maxPollAttempts {
+						logger.Printf("[SUB] OPEN hook: warmup still not ready after %ds polling, using IMDB-only path",
+							maxPollAttempts)
+					}
+				}
+			}
 
 			resultCh := globalSubtitleEngine.Run(subprovider.SubtitleJob{
 				VideoPath:     videoPath,
@@ -4330,6 +4358,8 @@ func main() {
 	globalDirCache = vfs.NewDirCache(10 * time.Second)
 
 	// Initialize global subtitle engine if enabled
+	logger.Printf("[SUB] INIT check: enabled=%v api_key=%q base_url=%q fuse_path=%q",
+		gc().Subtitle.Enabled, gc().Subtitle.APIKey, gc().Subtitle.BaseURL, gc().FuseMountPath)
 	if gc().Subtitle.Enabled {
 		engineCfg := subprovider.EngineConfig{
 			FUSEMountPath:         gc().FuseMountPath,
@@ -4490,6 +4520,8 @@ func main() {
 			oldEnabled := gc().BlockListEnabled
 			oldURL := gc().BlockListURL
 			oldFilter := gc().BlockListFilter
+			oldSubEnabled := gc().Subtitle.Enabled
+			oldSubAPIKey := gc().Subtitle.APIKey
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
@@ -4521,6 +4553,61 @@ func main() {
 				stopBlockListLoop()
 				torr.SetIPBlocklist(nil)
 				logger.Printf("[BlockList] Disabled: cleared from running engine")
+			}
+			// --- Subtitle toggle handling (Bug 1 fix: enable/disable at runtime) ---
+			newSubEnabled := gc().Subtitle.Enabled
+			if newSubEnabled && !oldSubEnabled {
+				// was off -> on: initialize subtitle engine at runtime
+				logger.Printf("[SUB] Toggle: enabled via dashboard, initializing subtitle engine")
+				engineCfg := subprovider.EngineConfig{
+					FUSEMountPath:         gc().FuseMountPath,
+					PreferredLanguages:    []subprovider.LanguageTag{subprovider.LangPortuguese},
+					OpenSubtitlesKey:      gc().Subtitle.APIKey,
+					OpenSubtitlesBaseURL:  gc().Subtitle.BaseURL,
+					OpenSubtitlesUser:     gc().Subtitle.User,
+					OpenSubtitlesPass:     gc().Subtitle.Password,
+					MaxResultsPerProvider: gc().Subtitle.MaxResults,
+				}
+				var err error
+				globalSubtitleEngine, err = subprovider.NewSubtitleEngine(engineCfg)
+				if err != nil {
+					logger.Printf("[SUB] WARNING: failed to initialize subtitle engine on toggle: %v", err)
+				} else {
+					globalSubtitleEngine.GetWriter().OnSidecarWritten = func(dirPath string) {
+						if globalDirCache != nil {
+							globalDirCache.Delete(dirPath)
+						}
+					}
+					logger.Printf("[SUB] Global subtitle engine initialized (mount=%s)", gc().FuseMountPath)
+				}
+			} else if !newSubEnabled && oldSubEnabled {
+				// was on -> off: disable subtitle engine at runtime
+				logger.Printf("[SUB] Toggle: disabled via dashboard, clearing subtitle engine")
+				globalSubtitleEngine = nil
+			} else if newSubEnabled && oldSubEnabled && oldSubAPIKey != gc().Subtitle.APIKey {
+				// API key changed while enabled: reinitialize engine
+				logger.Printf("[SUB] Toggle: API key changed, reinitializing subtitle engine")
+				engineCfg := subprovider.EngineConfig{
+					FUSEMountPath:         gc().FuseMountPath,
+					PreferredLanguages:    []subprovider.LanguageTag{subprovider.LangPortuguese},
+					OpenSubtitlesKey:      gc().Subtitle.APIKey,
+					OpenSubtitlesBaseURL:  gc().Subtitle.BaseURL,
+					OpenSubtitlesUser:     gc().Subtitle.User,
+					OpenSubtitlesPass:     gc().Subtitle.Password,
+					MaxResultsPerProvider: gc().Subtitle.MaxResults,
+				}
+				var err error
+				globalSubtitleEngine, err = subprovider.NewSubtitleEngine(engineCfg)
+				if err != nil {
+					logger.Printf("[SUB] WARNING: failed to reinitialize subtitle engine on toggle: %v", err)
+				} else {
+					globalSubtitleEngine.GetWriter().OnSidecarWritten = func(dirPath string) {
+						if globalDirCache != nil {
+							globalDirCache.Delete(dirPath)
+						}
+					}
+					logger.Printf("[SUB] Global subtitle engine reinitialized (mount=%s)", gc().FuseMountPath)
+				}
 			}
 			logger.Printf("[Config] Updated via Dashboard API")
 			w.WriteHeader(200)

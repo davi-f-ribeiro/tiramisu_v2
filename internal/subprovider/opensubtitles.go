@@ -13,11 +13,12 @@ import (
 
 // OSProvider implements Provider for the OpenSubtitles REST API.
 type OSProvider struct {
-	apiKey   string
-	baseURL  string
-	user     string
-	password string
-	token    string
+	apiKey    string
+	baseURL   string
+	user      string
+	password  string
+	token     string
+	userAgent string
 	// tokenExpiry is the absolute time when the current token expires.
 	// A nil/zero value means the token has not been fetched yet.
 	tokenExpiry time.Time
@@ -30,11 +31,16 @@ func NewOSProvider(apiKey, baseURL, user, password string) *OSProvider {
 	if baseURL == "" {
 		baseURL = "https://api.opensubtitles.com"
 	}
+	version := getAppVersion()
+	if version == "" {
+		version = "0.0.0"
+	}
 	return &OSProvider{
-		apiKey:   apiKey,
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		user:     user,
-		password: password,
+		apiKey:    apiKey,
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		user:      user,
+		password:  password,
+		userAgent: "Tiramisu/" + version + " (https://github.com/MrRobotoGit/tiramisu)",
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -77,6 +83,7 @@ func (p *OSProvider) ensureToken() error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Api-Key", p.apiKey)
+	req.Header.Set("User-Agent", p.userAgent)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -128,6 +135,7 @@ func (p *OSProvider) Search(videoHash, imdbID, torrentName string, lang Language
 
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Api-Key", p.apiKey)
+	req.Header.Set("User-Agent", p.userAgent)
 	if p.token != "" {
 		req.Header.Set("Authorization", "Bearer "+p.token)
 	}
@@ -237,6 +245,7 @@ func (p *OSProvider) Download(sub Subtitle) ([]byte, error) {
 	req, _ := http.NewRequest("POST", downloadURL, bytes.NewReader(downloadPayload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Api-Key", p.apiKey)
+	req.Header.Set("User-Agent", p.userAgent)
 	req.Header.Set("Authorization", "Bearer "+p.token)
 
 	resp, err := p.client.Do(req)
