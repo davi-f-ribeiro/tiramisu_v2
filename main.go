@@ -4128,21 +4128,27 @@ func main() {
 
 		standaloneLogger := log.New(os.Stderr, "[ARR backfill] ", 0)
 
-		// Create a minimal in-memory DB for the backfill
-		tmpDB, err := metadb.New("", nil)
+		// Open the persistent state DB so backfill writes survive process exit.
+		dbDir := filepath.Dir(dbPath)
+		dbPathFile := filepath.Join(dbDir, ".tiramisu", "tiramisu.db")
+		persistDB, err := metadb.New(dbPathFile, standaloneLogger)
 		if err != nil {
 			standaloneLogger.Printf("FAIL: metadb: %v", err)
 			os.Exit(1)
 		}
-		defer tmpDB.Close()
 
-		store := arr.NewDBStore(tmpDB.SQL())
+		store := arr.NewDBStore(persistDB.SQL())
 		stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, store, standaloneLogger)
 		if err != nil {
 			standaloneLogger.Printf("FAIL: %v", err)
 		}
 		standaloneLogger.Printf("DONE: %d movies, %d series, %d episodes (%dms)",
 			stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
+
+		// Close and flush WAL before exiting.
+		if err := persistDB.Close(); err != nil {
+			standaloneLogger.Printf("WARN: close db: %v", err)
+		}
 
 		if err != nil {
 			os.Exit(1)
@@ -4369,18 +4375,17 @@ func main() {
 		_ = arr.StartStandaloneListeners(arrCtx, arrStore)
 		logger.Printf("[ARR] Radarr/Sonarr API v3 facade active (ports :7878/:8989)")
 
-		// Async backfill: catalog pre-existing stubs in background.
+		// Run online backfill BEFORE the scheduler so it completes synchronously
+		// and does not race with stub creation/removal.
 		// Uses arrCtx (cancellable by backgroundStopChan) so SIGTERM
 		// interrupts the backfill before the DB is closed.
-		go func() {
-			stats, err := arr.RunBackfill(arrCtx, moviesDir, tvDir, arrStore, logger)
-			if err != nil {
-				logger.Printf("[ARR] backfill error: %v", err)
-			} else {
-				logger.Printf("[ARR] backfill done: %d movies, %d series, %d eps (%dms)",
-					stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
-			}
-		}()
+		stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger)
+		if err != nil {
+			logger.Printf("[ARR] backfill error: %v", err)
+		} else {
+			logger.Printf("[ARR] backfill done: %d movies, %d series, %d eps (%dms)",
+				stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
+		}
 	}
 
 	// Pre-populate cache at startup to improve Plex scan performance.
