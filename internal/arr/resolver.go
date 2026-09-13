@@ -12,9 +12,12 @@ import (
 
 // resolveCacheEntry holds a cached TMDB resolution result.
 type resolveCacheEntry struct {
-	tmdbID        int64
-	releaseDate   string
-	expiresAt     time.Time
+	tmdbID       int64
+	releaseDate  string
+	title        string
+	posterPath   string
+	backdropPath string
+	expiresAt    time.Time
 }
 
 // ResolveConfig holds configuration for the TMDB resolver.
@@ -123,7 +126,7 @@ func (r *TMDBResolver) resolveOnce(ctx context.Context) {
 
 		// Retry loop.
 		var tmdbID int64
-		var releaseDate string
+		var releaseDate, title, posterPath, backdropPath string
 		var lastErr error
 
 		for attempt := 0; attempt < r.config.MaxRetry; attempt++ {
@@ -134,7 +137,7 @@ func (r *TMDBResolver) resolveOnce(ctx context.Context) {
 					return
 				}
 			}
-			tmdbID, releaseDate, lastErr = r.config.Client.FindByIMDbID(ctx, media.IMDBID)
+			tmdbID, releaseDate, title, posterPath, backdropPath, lastErr = r.config.Client.FindByIMDbID(ctx, media.IMDBID)
 			if lastErr == nil {
 				break
 			}
@@ -148,9 +151,12 @@ func (r *TMDBResolver) resolveOnce(ctx context.Context) {
 
 		// Cache result for 1h.
 		r.cache.Store(media.IMDBID, &resolveCacheEntry{
-			tmdbID:      tmdbID,
-			releaseDate: releaseDate,
-			expiresAt:   time.Now().Add(1 * time.Hour),
+			tmdbID:       tmdbID,
+			releaseDate:  releaseDate,
+			title:        title,
+			posterPath:   posterPath,
+			backdropPath: backdropPath,
+			expiresAt:    time.Now().Add(1 * time.Hour),
 		})
 
 		year := extractYearFrom(releaseDate)
@@ -190,34 +196,52 @@ func extractYearFrom(date string) int {
 	return 0
 }
 
+// resolveResult is the return type for JIT resolution.
+type resolveResult struct {
+	TmdbID       int64
+	ReleaseDate  string
+	Title        string
+	PosterPath   string
+	BackdropPath string
+}
 
-// ResolveIMDbID synchronously resolves an IMDb ID to a TMDB ID using the
-// in-memory cache. If not cached, it queries the TMDb API directly.
-// Returns (tmdbID, releaseDate, error). tmdbID=0 means resolution failed.
-func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (int64, string, error) {
+// ResolveIMDbID synchronously resolves an IMDb ID using the in-memory cache,
+// querying the TMDb API when not cached. Returns a full metadata result or error.
+func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (*resolveResult, error) {
 	// 1. Fast path: check cache.
 	if entry, ok := r.cache.Load(imdbID); ok {
 		e := entry.(*resolveCacheEntry)
 		if time.Now().Before(e.expiresAt) {
-			return e.tmdbID, e.releaseDate, nil
+			return &resolveResult{
+				TmdbID:       e.tmdbID,
+				ReleaseDate:  e.releaseDate,
+				Title:        e.title,
+				PosterPath:   e.posterPath,
+				BackdropPath: e.backdropPath,
+			}, nil
 		}
 		r.cache.Delete(imdbID)
 	}
 
 	// 2. Slow path: query TMDb with retries.
-	var tmdbID int64
-	var releaseDate string
-	var lastErr error
+	var (
+		tmdbID       int64
+		releaseDate  string
+		title        string
+		posterPath   string
+		backdropPath string
+		lastErr error
+	)
 
 	for attempt := 0; attempt < r.config.MaxRetry; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
-				return 0, "", ctx.Err()
+				return nil, ctx.Err()
 			case <-time.After(r.config.RetryDelay * time.Duration(attempt)):
 			}
 		}
-		tmdbID, releaseDate, lastErr = r.config.Client.FindByIMDbID(ctx, imdbID)
+		tmdbID, releaseDate, title, posterPath, backdropPath, lastErr = r.config.Client.FindByIMDbID(ctx, imdbID)
 		if lastErr == nil {
 			break
 		}
@@ -226,15 +250,24 @@ func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (int64,
 		if r.config.Logger != nil {
 			r.config.Logger.Printf("[TMDB resolver JIT] failed %s after %d attempts: %v", imdbID, r.config.MaxRetry, lastErr)
 		}
-		return 0, "", lastErr
+		return nil, lastErr
 	}
 
 	// 3. Cache the result for 1h.
 	r.cache.Store(imdbID, &resolveCacheEntry{
-		tmdbID:      tmdbID,
-		releaseDate: releaseDate,
-		expiresAt:   time.Now().Add(1 * time.Hour),
+		tmdbID:       tmdbID,
+		releaseDate:  releaseDate,
+		title:        title,
+		posterPath:   posterPath,
+		backdropPath: backdropPath,
+		expiresAt:    time.Now().Add(1 * time.Hour),
 	})
 
-	return tmdbID, releaseDate, nil
+	return &resolveResult{
+		TmdbID:       tmdbID,
+		ReleaseDate:  releaseDate,
+		Title:        title,
+		PosterPath:   posterPath,
+		BackdropPath: backdropPath,
+	}, nil
 }

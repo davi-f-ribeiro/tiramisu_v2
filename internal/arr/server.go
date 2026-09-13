@@ -488,7 +488,7 @@ func (h *Handler) handleTag(w http.ResponseWriter, r *http.Request) {
 }
 
 // populateMovieFields enriches a RadarrMovie with computed title fields,
-// availability flags, and an optional MovieFile subobject for Bazarr.
+// availability flags, images, and an optional MovieFile subobject for Bazarr.
 // Uniqueness guard: when tmdbId is absent (≤ 0) we fall back to the
 // internal arr_media.id so Bazarr never sees duplicate zero values that
 // trigger UNIQUE constraint failures.
@@ -503,11 +503,16 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 	// JIT resolution: if tmdbId is zero and we have an imdbId, try to
 	// resolve it synchronously from the TMDb API (with in-memory cache).
 	if m.TmdbID <= 0 && m.ImdbID != "" && h.resolver != nil {
-		if tmdbID, releaseDate, err := h.resolver.ResolveIMDbID(ctx, m.ImdbID); err == nil && tmdbID > 0 {
-			m.TmdbID = tmdbID
-			if m.Year == 0 {
-				m.Year = extractYearFrom(releaseDate)
+		if res, err := h.resolver.ResolveIMDbID(ctx, m.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
+			m.TmdbID = res.TmdbID
+			if res.Title != "" {
+				m.Title = res.Title
 			}
+			if m.Year == 0 && res.ReleaseDate != "" {
+				m.Year = extractYearFrom(res.ReleaseDate)
+			}
+			m.PosterPath = res.PosterPath
+			m.BackdropPath = res.BackdropPath
 		}
 	}
 
@@ -519,10 +524,16 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 
 	// Compute title fields Bazarr requires.
 	cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
+	if cleanTitle == "" {
+		cleanTitle = strings.ReplaceAll(m.RawTitle, "_", " ")
+	}
 	m.SortTitle = strings.ToLower(cleanTitle)
 	m.CleanTitle = cleanTitle
 	m.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
 	m.Status = "released"
+
+	// Mount TMDb image URLs into the images array.
+	mountTMDBImages(m, m.PosterPath, m.BackdropPath)
 
 	if m.MovieFile == nil && m.Path != "" {
 		fullPath := m.Path
@@ -546,6 +557,50 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 		}
 		// Directory path goes into m.Path.
 		m.Path = filepath.Dir(fullPath)
+	}
+}
+
+// mountTMDBImages builds the images array from TMDb poster/backdrop paths.
+func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
+	if posterPath == "" && backdropPath == "" {
+		return
+	}
+
+	switch v := m.(type) {
+	case *RadarrMovie:
+		images := make([]MediaImage, 0, 2)
+		if posterPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "poster",
+				URL:       "https://image.tmdb.org/t/p/w500" + posterPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w500" + posterPath,
+			})
+		}
+		if backdropPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "fanart",
+				URL:       "https://image.tmdb.org/t/p/w1280" + backdropPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w1280" + backdropPath,
+			})
+		}
+		v.Images = images
+	case *SonarrSeries:
+		images := make([]MediaImage, 0, 2)
+		if posterPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "poster",
+				URL:       "https://image.tmdb.org/t/p/w500" + posterPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w500" + posterPath,
+			})
+		}
+		if backdropPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "fanart",
+				URL:       "https://image.tmdb.org/t/p/w1280" + backdropPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w1280" + backdropPath,
+			})
+		}
+		v.Images = images
 	}
 }
 
@@ -602,8 +657,13 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	// resolve it synchronously from the TMDb API (with in-memory cache).
 	for _, s := range series {
 		if s.TvdbID <= 0 && s.ImdbID != "" && h.resolver != nil {
-			if tmdbID, _, err := h.resolver.ResolveIMDbID(ctx, s.ImdbID); err == nil && tmdbID > 0 {
-				s.TvdbID = tmdbID
+			if res, err := h.resolver.ResolveIMDbID(ctx, s.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
+				s.TvdbID = res.TmdbID
+				if res.Title != "" {
+					s.Title = res.Title
+				}
+				s.PosterPath = res.PosterPath
+				s.BackdropPath = res.BackdropPath
 			}
 		}
 		// Uniqueness fallback for Bazarr: tvdbId=0 would collide across
@@ -611,6 +671,8 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 		if s.TvdbID <= 0 {
 			s.TvdbID = s.ID
 		}
+		// Mount TMDb image URLs into the images array.
+		mountTMDBImages(s, s.PosterPath, s.BackdropPath)
 	}
 	jsonResponse(w, http.StatusOK, series)
 }
@@ -637,14 +699,21 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
 	// resolve it synchronously from the TMDb API (with in-memory cache).
 	if series.TvdbID <= 0 && series.ImdbID != "" && h.resolver != nil {
-		if tmdbID, _, err := h.resolver.ResolveIMDbID(ctx, series.ImdbID); err == nil && tmdbID > 0 {
-			series.TvdbID = tmdbID
+		if res, err := h.resolver.ResolveIMDbID(ctx, series.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
+			series.TvdbID = res.TmdbID
+			if res.Title != "" {
+				series.Title = res.Title
+			}
+			series.PosterPath = res.PosterPath
+			series.BackdropPath = res.BackdropPath
 		}
 	}
 	// Uniqueness fallback for Bazarr: tvdbId=0 uses unique internal ID.
 	if series.TvdbID <= 0 {
 		series.TvdbID = series.ID
 	}
+	// Mount TMDb image URLs into the images array.
+	mountTMDBImages(series, series.PosterPath, series.BackdropPath)
 	jsonResponse(w, http.StatusOK, series)
 }
 

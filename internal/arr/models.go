@@ -72,16 +72,29 @@ type RadarrMovie struct {
 	TmdbID          int64             `json:"tmdbId"`
 	Size            int64             `json:"size,omitempty"`
 	MovieFile       *RadarrMovieFile  `json:"movieFile,omitempty"`
+	Images          []MediaImage      `json:"images,omitempty"`
+	PosterPath      string            `json:"-"`
+	BackdropPath    string            `json:"-"`
 }
 
 // SonarrSeries mirrors Sonarr's series response.
 type SonarrSeries struct {
-	ID        int64  `json:"id"`
-	Title     string `json:"title"`
-	Path      string `json:"path"`
-	Monitored bool   `json:"monitored"`
-	TvdbID    int64  `json:"tvdbId"`
-	ImdbID    string `json:"imdbId"`
+	ID           int64        `json:"id"`
+	Title        string       `json:"title"`
+	Path         string       `json:"path"`
+	Monitored    bool         `json:"monitored"`
+	TvdbID       int64        `json:"tvdbId"`
+	ImdbID       string       `json:"imdbId"`
+	Images       []MediaImage `json:"images,omitempty"`
+	PosterPath   string       `json:"-"`
+	BackdropPath string       `json:"-"`
+}
+
+// MediaImage mirrors Servarr's cover image (poster or fanart/backdrop).
+type MediaImage struct {
+	CoverType string `json:"coverType"` // "poster", "fanart"
+	URL       string `json:"url"`
+	RemoteURL string `json:"remoteUrl"`
 }
 
 // SonarrEpisode mirrors Sonarr's episode response.
