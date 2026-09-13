@@ -59,15 +59,17 @@ type SonarrSeries struct {
 
 // SonarrEpisode mirrors Sonarr's episode response.
 type SonarrEpisode struct {
-	ID           int64  `json:"id"`
-	SeriesID     int64  `json:"seriesId"`
-	EpisodeFileID int64 `json:"episodeFileId"`
-	SeasonNumber int    `json:"seasonNumber"`
-	EpisodeNumber int   `json:"episodeNumber"`
-	Title        string `json:"title"`
-	HasFile      bool   `json:"hasFile"`
-	Monitored    bool   `json:"monitored"`
-	Size         int64  `json:"size,omitempty"`
+	ID            int64              `json:"id"`
+	SeriesID      int64              `json:"seriesId"`
+	EpisodeFileID int64              `json:"episodeFileId"`
+	SeasonNumber  int                `json:"seasonNumber"`
+	EpisodeNumber int                `json:"episodeNumber"`
+	Title         string             `json:"title"`
+	Path          string             `json:"path"`
+	HasFile       bool               `json:"hasFile"`
+	Monitored     bool               `json:"monitored"`
+	Size          int64              `json:"size,omitempty"`
+	EpisodeFile   *SonarrEpisodeFile `json:"episodeFile,omitempty"`
 }
 
 // SonarrEpisodeFile mirrors Sonarr's episode file response.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,7 +164,7 @@ func (s *DBStore) GetSeriesByID(ctx context.Context, id int64) (*SonarrSeries, e
 // GetEpisodesBySeries returns all episodes for a given series ID.
 func (s *DBStore) GetEpisodesBySeries(ctx context.Context, seriesID int64) ([]*SonarrEpisode, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, series_id, season_number, episode_number, title, size, updated_at
+		SELECT id, series_id, season_number, episode_number, title, path, size, updated_at
 		FROM arr_media WHERE media_type = 'episode' AND series_id = $1 ORDER BY season_number, episode_number`, seriesID)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get episodes: %w", err)
@@ -175,7 +176,7 @@ func (s *DBStore) GetEpisodesBySeries(ctx context.Context, seriesID int64) ([]*S
 		var updatedAt string
 		var e SonarrEpisode
 		if err := rows.Scan(&e.ID, &e.SeriesID, &e.SeasonNumber, &e.EpisodeNumber,
-			&e.Title, &e.Size, &updatedAt); err != nil {
+			&e.Title, &e.Path, &e.Size, &updatedAt); err != nil {
 			return nil, fmt.Errorf("arr: scan episode: %w", err)
 		}
 		e.HasFile = true
@@ -433,6 +434,23 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 	if movies == nil {
 		movies = []*RadarrMovie{}
 	}
+	// Populate movieFile subobjects so Bazarr can resolve video + subtitle paths.
+	for _, m := range movies {
+		m.HasFile = true
+		m.IsAvailable = true
+		m.Monitored = true
+		if m.MovieFile == nil && m.Path != "" {
+			m.MovieFile = &RadarrMovieFile{
+				ID:           m.ID,
+				MovieID:      m.ID,
+				RelativePath: filepath.Base(m.Path),
+				Path:         m.Path,
+				Size:         m.Size,
+			}
+			// Directory path goes into m.Path.
+			m.Path = filepath.Dir(m.Path)
+		}
+	}
 	jsonResponse(w, http.StatusOK, movies)
 }
 
@@ -454,6 +472,20 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Populate movieFile subobject.
+	movie.HasFile = true
+	movie.IsAvailable = true
+	movie.Monitored = true
+	if movie.MovieFile == nil && movie.Path != "" {
+		movie.MovieFile = &RadarrMovieFile{
+			ID:           movie.ID,
+			MovieID:      movie.ID,
+			RelativePath: filepath.Base(movie.Path),
+			Path:         movie.Path,
+			Size:         movie.Size,
+		}
+		movie.Path = filepath.Dir(movie.Path)
 	}
 	jsonResponse(w, http.StatusOK, movie)
 }
@@ -513,6 +545,23 @@ func (h *Handler) handleEpisodesBySeries(w http.ResponseWriter, r *http.Request)
 	}
 	if eps == nil {
 		eps = []*SonarrEpisode{}
+	}
+	// Populate episodeFile subobjects so Bazarr can resolve subtitle + video paths.
+	for i := range eps {
+		e := eps[i]
+		e.HasFile = true
+		e.Monitored = true
+		e.EpisodeFileID = e.ID
+		if e.EpisodeFile == nil && e.Path != "" {
+			e.EpisodeFile = &SonarrEpisodeFile{
+				ID:           e.ID,
+				SeriesID:     e.SeriesID,
+				SeasonNumber: e.SeasonNumber,
+				RelativePath: filepath.Base(e.Path),
+				Path:         e.Path,
+				Size:         e.Size,
+			}
+		}
 	}
 	jsonResponse(w, http.StatusOK, eps)
 }

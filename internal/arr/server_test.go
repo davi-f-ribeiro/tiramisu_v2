@@ -701,3 +701,187 @@ func TestSonarrSignalRNegotiateV3(t *testing.T) {
 		t.Errorf("negotiateVersion = %v, want 1", res["negotiateVersion"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 9. movieFile and episodeFile subobjects (Bazarr subtitle indexation)
+// ---------------------------------------------------------------------------
+
+func TestMovieListWithMovieFile(t *testing.T) {
+	store := newMockStore()
+	store.movies[1] = &RadarrMovie{ID: 1, Title: "Movie A", Year: 2020, Path: "/data/movies/the.movie.2020.mkv"}
+	store.movies[2] = &RadarrMovie{ID: 2, Title: "Movie B", Year: 2021, Path: "/data/movies/movie-b.mkv"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movies []*RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movies); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(movies) != 2 {
+		t.Fatalf("got %d movies, want 2", len(movies))
+	}
+	// Every movie must have movieFile populated with relativePath != "".
+	for _, m := range movies {
+		if m.MovieFile == nil {
+			t.Errorf("movie %q: movieFile is nil", m.Title)
+			continue
+		}
+		if m.MovieFile.RelativePath == "" {
+			t.Errorf("movie %q: movieFile.relativePath is empty", m.Title)
+		}
+		if m.MovieFile.Path == "" {
+			t.Errorf("movie %q: movieFile.path is empty", m.Title)
+		}
+		if m.Path == "" {
+			t.Errorf("movie %q: path (directory) is empty", m.Title)
+		}
+		if !m.HasFile || !m.Monitored {
+			t.Errorf("movie %q: hasFile=%v, monitored=%v, want true,true", m.Title, m.HasFile, m.Monitored)
+		}
+	}
+}
+
+func TestMovieDetailWithMovieFile(t *testing.T) {
+	store := newMockStore()
+	store.movies[42] = &RadarrMovie{
+		ID: 42, Title: "The Movie", Year: 2019, Path: "/data/movies/the.movie.2019.mkv",
+		TmdbID: 12345, ImdbID: "tt1234567",
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie/42", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movie RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movie); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if movie.MovieFile == nil {
+		t.Fatal("movie.movieFile is nil")
+	}
+	if movie.MovieFile.RelativePath == "" {
+		t.Error("movieFile.relativePath is empty")
+	}
+	if movie.MovieFile.Path == "" {
+		t.Error("movieFile.path is empty")
+	}
+	if movie.MovieFile.MovieID != 42 {
+		t.Errorf("movieFile.movieId = %d, want 42", movie.MovieFile.MovieID)
+	}
+	if movie.MovieFile.ID != 42 {
+		t.Errorf("movieFile.id = %d, want 42", movie.MovieFile.ID)
+	}
+	if !movie.HasFile || !movie.Monitored {
+		t.Errorf("hasFile=%v, monitored=%v, want true,true", movie.HasFile, movie.Monitored)
+	}
+	// movie.Path should be the directory now.
+	if movie.Path == "" {
+		t.Error("movie path (directory) is empty")
+	}
+}
+
+func TestEpisodesWithEpisodeFile(t *testing.T) {
+	store := newMockStore()
+	store.series[10] = &SonarrSeries{ID: 10, Title: "Show Z", TvdbID: 888, Path: "/data/shows/show-z"}
+	store.eps[10] = []*SonarrEpisode{
+		{ID: 1, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 1, Title: "Pilot", Path: "/data/shows/show-z/S01E01.mkv", Size: 500},
+		{ID: 2, SeriesID: 10, SeasonNumber: 1, EpisodeNumber: 2, Title: "Second", Path: "/data/shows/show-z/S01E02.mkv", Size: 550},
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/episode?seriesId=10", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var eps []*SonarrEpisode
+	if err := json.Unmarshal(w.Body.Bytes(), &eps); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(eps) != 2 {
+		t.Fatalf("got %d episodes, want 2", len(eps))
+	}
+	// Each episode must have episodeFile populated.
+	for _, e := range eps {
+		if e.EpisodeFile == nil {
+			t.Errorf("episode %q: episodeFile is nil", e.Title)
+			continue
+		}
+		if e.EpisodeFile.RelativePath == "" {
+			t.Errorf("episode %q: episodeFile.relativePath is empty", e.Title)
+		}
+		if e.EpisodeFile.Path == "" {
+			t.Errorf("episode %q: episodeFile.path is empty", e.Title)
+		}
+		if e.EpisodeFile.SeriesID != e.SeriesID {
+			t.Errorf("episode %q: episodeFile.seriesId = %d, want %d", e.Title, e.EpisodeFile.SeriesID, e.SeriesID)
+		}
+		if e.EpisodeFileID == 0 {
+			t.Errorf("episode %q: episodeFileId = 0, want %d", e.Title, e.ID)
+		}
+		if !e.HasFile || !e.Monitored {
+			t.Errorf("episode %q: hasFile=%v, monitored=%v, want true,true", e.Title, e.HasFile, e.Monitored)
+		}
+	}
+	if eps[0].Title != "Pilot" {
+		t.Errorf("first episode title = %q, want Pilot", eps[0].Title)
+	}
+}
+
+func TestEpisodeFilesWithRelativePath(t *testing.T) {
+	store := newMockStore()
+	store.series[20] = &SonarrSeries{ID: 20, Title: "Show A", TvdbID: 999}
+	store.epFiles[20] = []*SonarrEpisodeFile{
+		{ID: 100, SeriesID: 20, SeasonNumber: 1, RelativePath: "S01E01.mkv", Path: "/data/shows/a/S01E01.mkv", Size: 1000},
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/episodefile?seriesId=20", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var files []*SonarrEpisodeFile
+	if err := json.Unmarshal(w.Body.Bytes(), &files); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d episode files, want 1", len(files))
+	}
+	if files[0].RelativePath == "" {
+		t.Error("episodeFile.relativePath is empty")
+	}
+	if files[0].Path == "" {
+		t.Error("episodeFile.path is empty")
+	}
+}
