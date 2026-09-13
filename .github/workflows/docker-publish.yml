@@ -21,7 +21,7 @@ permissions:
 env:
   # Registry settings - GHCR only
   REGISTRY_GHCR: ghcr.io
-  IMAGE_NAME: tiramisu
+  IMAGE_NAME: tiramisu_v2
 
 jobs:
   publish:
@@ -77,4 +77,4 @@ jobs:
           echo "**Platforms:** linux/amd64" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Published to:" >> $GITHUB_STEP_SUMMARY
-          echo "- **GitHub Container Registry:** \`docker pull ghcr.io/davi-f-ribeiro/tiramisu:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Container Registry:** \`docker pull ghcr.io/davi-f-ribeiro/tiramisu_v2:latest\`" >> $GITHUB_STEP_SUMMARY
