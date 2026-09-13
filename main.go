@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 	"tiramisu/internal/ai"
+	"tiramisu/internal/arr"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/config"
@@ -51,16 +52,15 @@ import (
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/registry"
-	"tiramisu/internal/arr"
+	"tiramisu/internal/subprovider"
+	syncer "tiramisu/internal/syncer"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/syncer/engines"
-	syncer "tiramisu/internal/syncer"
 	"tiramisu/internal/syncer/scheduler"
 	"tiramisu/internal/telemetry"
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
-	"tiramisu/internal/subprovider"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -4369,9 +4369,11 @@ func main() {
 		_ = arr.StartStandaloneListeners(arrCtx, arrStore)
 		logger.Printf("[ARR] Radarr/Sonarr API v3 facade active (ports :7878/:8989)")
 
-		// Async backfill: catalog pre-existing stubs in background
+		// Async backfill: catalog pre-existing stubs in background.
+		// Uses arrCtx (cancellable by backgroundStopChan) so SIGTERM
+		// interrupts the backfill before the DB is closed.
 		go func() {
-			stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger)
+			stats, err := arr.RunBackfill(arrCtx, moviesDir, tvDir, arrStore, logger)
 			if err != nil {
 				logger.Printf("[ARR] backfill error: %v", err)
 			} else {
@@ -4895,7 +4897,7 @@ func main() {
 	// Stub Management API
 	stubsMoviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
 	stubsTVDir := filepath.Join(gc().PhysicalSourcePath, "tv")
-	
+
 	// Create dedicated stub management engines (don't share with scheduler to avoid side-effects)
 	movieStubEngine := engines.NewMovieGoEngine(engines.MovieEngineConfig{
 		GoStormURL:      gc().GoStormBaseURL,
@@ -4914,7 +4916,7 @@ func main() {
 		Weights:         gc().QualityScoringConfig.MovieWeights(),
 		InvalidatePath:  invalidateSyncRemovedPath,
 	})
-	
+
 	tvStubEngine := engines.NewTVGoEngine(engines.TVEngineConfig{
 		GoStormURL:      gc().GoStormBaseURL,
 		TMDBAPIKey:      gc().TMDBAPIKey,
@@ -4932,13 +4934,13 @@ func main() {
 		Weights:         gc().QualityScoringConfig.TVWeights(),
 		InvalidatePath:  invalidateSyncRemovedPath,
 	}, nil)
-	
+
 	movieStubAPI := engines.NewMovieStubAPI(movieStubEngine)
 	tvStubAPI := engines.NewTVStubAPI(tvStubEngine)
-	
+
 	stubsHandler := syncer.NewStubsHandler(movieStubAPI, tvStubAPI, stubsMoviesDir, stubsTVDir)
 	stubsHandler.RegisterRoutes(http.DefaultServeMux)
-	
+
 	// Serve stub management HTML page
 	stubsHTML, loadErr := dashboard.StubManagementContent()
 	if loadErr != nil {

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -211,24 +210,23 @@ func (s *DBStore) GetEpisodeFilesBySeries(ctx context.Context, seriesID int64) (
 
 // Handler serves the Servarr v3 API.
 type Handler struct {
-	store        MediaStore
-	storeWriter  MediaStoreWriter // nil for read-only (standalone listeners)
-	appName      string
-	urlBase      string
-	moviesDir    string
-	tvDir        string
-	logger       *log.Logger
-	mu           sync.RWMutex
+	store       MediaStore
+	storeWriter MediaStoreWriter // nil for read-only (standalone listeners)
+	appName     string
+	urlBase     string
+	moviesDir   string
+	tvDir       string
+	logger      *log.Logger
 }
 
 // NewHandler creates a new Handler with the given store and optional app name override.
 func NewHandler(store MediaStore, opts ...HandlerOption) *Handler {
 	h := &Handler{
-		store:   store,
-		appName: "Radarr",
-		urlBase: "",
+		store:     store,
+		appName:   "Radarr",
+		urlBase:   "",
 		moviesDir: "",
-		tvDir:       "",
+		tvDir:     "",
 		logger:    log.Default(),
 	}
 	for _, opt := range opts {
@@ -261,19 +259,6 @@ func WithLogger(l *log.Logger) HandlerOption {
 // WithStoreWriter sets the MediaStoreWriter for backfill operations.
 func WithStoreWriter(w MediaStoreWriter) HandlerOption {
 	return func(h *Handler) { h.storeWriter = w }
-}
-
-// SetAppName overrides the application name.
-func (h *Handler) SetAppName(name string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.appName = name
-}
-
-func (h *Handler) getAppName() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.appName
 }
 
 // RegisterRoutes mounts all API routes on the given ServeMux.
@@ -327,22 +312,6 @@ func jsonResponse(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
-}
-
-// defaultQuality is the baseline quality value sent in MovieFile and EpisodeFile
-// so Bazarr's parser never hits KeyError('quality').
-var defaultQuality = QualityModel{
-	Quality: QualityDetail{
-		ID:         7,
-		Name:       "WEBDL-1080p",
-		Source:     "webdl",
-		Resolution: 1080,
-	},
-	Revision: RevisionDetail{
-		Version:  1,
-		Real:     0,
-		IsRepack: false,
-	},
 }
 
 // parseQualityFromFilename infers resolution and source from a media filename
@@ -426,8 +395,8 @@ func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 
 	if h.storeWriter == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{
-			"status":       "error",
-			"message":      "backfill not configured",
+			"status":           "error",
+			"message":          "backfill not configured",
 			"movies_indexed":   0,
 			"series_indexed":   0,
 			"episodes_indexed": 0,
@@ -438,8 +407,8 @@ func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.moviesDir == "" && h.tvDir == "" {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{
-			"status":       "error",
-			"message":      "no media directories configured",
+			"status":           "error",
+			"message":          "no media directories configured",
 			"movies_indexed":   0,
 			"series_indexed":   0,
 			"episodes_indexed": 0,
@@ -470,7 +439,7 @@ func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
-	appName := h.getAppName()
+	appName := h.appName
 	if r.URL.Query().Get("app") == "sonarr" {
 		appName = "Sonarr"
 	}
@@ -512,6 +481,48 @@ func (h *Handler) handleTag(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, []any{})
 }
 
+// populateMovieFields enriches a RadarrMovie with computed title fields,
+// availability flags, and an optional MovieFile subobject for Bazarr.
+func (h *Handler) populateMovieFields(m *RadarrMovie) {
+	if m == nil {
+		return
+	}
+	m.HasFile = true
+	m.IsAvailable = true
+	m.Monitored = true
+
+	// Compute title fields Bazarr requires.
+	cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
+	m.SortTitle = strings.ToLower(cleanTitle)
+	m.CleanTitle = cleanTitle
+	m.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
+	m.Status = "released"
+
+	if m.MovieFile == nil && m.Path != "" {
+		fullPath := m.Path
+		basename := filepath.Base(fullPath)
+		rawTitle := m.RawTitle
+		if rawTitle == "" {
+			rawTitle = m.Title // fallback: use title as rawTitle if not set
+			if rawTitle == "" {
+				rawTitle = basename
+			}
+		}
+		m.RawTitle = rawTitle
+		m.MovieFile = &RadarrMovieFile{
+			ID:           m.ID,
+			MovieID:      m.ID,
+			RelativePath: basename,
+			Path:         fullPath,
+			Size:         m.Size,
+			DateAdded:    time.Now().UTC().Format(time.RFC3339),
+			Quality:      parseQualityFromFilename(m.RawTitle, basename),
+		}
+		// Directory path goes into m.Path.
+		m.Path = filepath.Dir(fullPath)
+	}
+}
+
 func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	movies, err := h.store.GetMovies(ctx)
@@ -522,44 +533,8 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 	if movies == nil {
 		movies = []*RadarrMovie{}
 	}
-	// Populate movieFile subobjects so Bazarr can resolve video + subtitle paths.
 	for _, m := range movies {
-		m.HasFile = true
-		m.IsAvailable = true
-		m.Monitored = true
-
-		// Fallback: if external ID is zero Bazarr treats duplicates as unique,
-		// causing UNIQUE constraint errors in table_movies.tmdbId.
-		if m.TmdbID <= 0 {
-			m.TmdbID = m.ID
-		}
-
-		// Compute title fields Bazarr requires.
-		cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
-		m.SortTitle = strings.ToLower(cleanTitle)
-		m.CleanTitle = cleanTitle
-		m.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
-		m.Status = "released"
-
-		if m.MovieFile == nil && m.Path != "" {
-			fullPath := m.Path
-			basename := filepath.Base(fullPath)
-			m.RawTitle = m.Title // fallback: use title as rawTitle if not set
-			if m.RawTitle == "" {
-				m.RawTitle = basename
-			}
-			m.MovieFile = &RadarrMovieFile{
-				ID:           m.ID,
-				MovieID:      m.ID,
-				RelativePath: basename,
-				Path:         fullPath,
-				Size:         m.Size,
-				DateAdded:    time.Now().UTC().Format(time.RFC3339),
-				Quality:      parseQualityFromFilename(m.RawTitle, basename),
-			}
-			// Directory path goes into m.Path.
-			m.Path = filepath.Dir(fullPath)
-		}
+		h.populateMovieFields(m)
 	}
 	jsonResponse(w, http.StatusOK, movies)
 }
@@ -583,35 +558,7 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	movie.HasFile = true
-	movie.IsAvailable = true
-	movie.Monitored = true
-	if movie.TmdbID <= 0 {
-		movie.TmdbID = movie.ID
-	}
-	cleanTitle := strings.ReplaceAll(movie.Title, "_", " ")
-	movie.SortTitle = strings.ToLower(cleanTitle)
-	movie.CleanTitle = cleanTitle
-	movie.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
-	movie.Status = "released"
-	if movie.MovieFile == nil && movie.Path != "" {
-		fullPath := movie.Path
-		basename := filepath.Base(fullPath)
-		movie.RawTitle = movie.Title // fallback
-		if movie.RawTitle == "" {
-			movie.RawTitle = basename
-		}
-		movie.MovieFile = &RadarrMovieFile{
-			ID:           movie.ID,
-			MovieID:      movie.ID,
-			RelativePath: basename,
-			Path:         fullPath,
-			Size:         movie.Size,
-			DateAdded:    time.Now().UTC().Format(time.RFC3339),
-			Quality:      parseQualityFromFilename(movie.RawTitle, basename),
-		}
-		movie.Path = filepath.Dir(fullPath)
-	}
+	h.populateMovieFields(movie)
 	jsonResponse(w, http.StatusOK, movie)
 }
 
@@ -624,11 +571,6 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	}
 	if series == nil {
 		series = []*SonarrSeries{}
-	}
-	for _, s := range series {
-		if s.TvdbID <= 0 {
-			s.TvdbID = s.ID
-		}
 	}
 	jsonResponse(w, http.StatusOK, series)
 }
@@ -651,9 +593,6 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
-	}
-	if series.TvdbID <= 0 {
-		series.TvdbID = series.ID
 	}
 	jsonResponse(w, http.StatusOK, series)
 }

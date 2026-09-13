@@ -1044,8 +1044,9 @@ func TestMovieDetailSortTitle(t *testing.T) {
 // 12. Fallback de IDs externos para evitar UNIQUE constraint no Bazarr
 // ---------------------------------------------------------------------------
 
-func TestMovieTmdbIdFallbackDistinct(t *testing.T) {
+func TestMovieTmdbIdLeftZeroWhenAbsent(t *testing.T) {
 	// Cria dois filmes SEM TmdbID explícito (zero).
+	// Após a correção B1, IDs externos ausentes ficam como 0 — nunca usam arr_media.id.
 	store := newMockStore()
 	store.movies[10] = &RadarrMovie{ID: 10, Title: "Movie NoTMDB", Year: 2020, Path: "/data/movies/movie-no-tmdb.mkv", TmdbID: 0}
 	store.movies[11] = &RadarrMovie{ID: 11, Title: "Movie AlsoNoTMDB", Year: 2021, Path: "/data/movies/movie-also-no-tmdb.mkv", TmdbID: 0}
@@ -1070,22 +1071,18 @@ func TestMovieTmdbIdFallbackDistinct(t *testing.T) {
 		t.Fatalf("got %d movies, want 2", len(movies))
 	}
 
-	tmdbMap := make(map[int64]bool)
+	// Após a correção B1, ambos devem manter TmdbID == 0 (campo ausente, não fabricado).
 	for _, m := range movies {
-		if m.TmdbID <= 0 {
-			t.Errorf("movie %q: tmdbId = %d, deve ser > 0 (fallback para ID interno)", m.Title, m.TmdbID)
+		if m.TmdbID != 0 {
+			t.Errorf("movie %q: tmdbId = %d, esperado 0 (campo não fabricado)", m.Title, m.TmdbID)
 		}
-		if tmdbMap[m.TmdbID] {
-			t.Errorf("duplicação: tmdbId = %d compartilhado entre filmes — causará UNIQUE constraint no Bazarr", m.TmdbID)
-		}
-		tmdbMap[m.TmdbID] = true
-	}
-	if len(tmdbMap) != 2 {
-		t.Errorf("tmdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tmdbMap))
+		// IDs internos (arr_media.id) devem permanecer distintos.
 	}
 }
 
-func TestSeriesTvdbIdFallbackDistinct(t *testing.T) {
+func TestSeriesTvdbIdLeftZeroWhenAbsent(t *testing.T) {
+	// Cria duas séries SEM TvdbID explícito (zero).
+	// Após a correção B1, IDs externos ausentes ficam como 0 — nunca usam arr_media.id.
 	store := newMockStore()
 	store.series[30] = &SonarrSeries{ID: 30, Title: "Show NoTvdb", TvdbID: 0, Path: "/data/shows/no-tvdb"}
 	store.series[31] = &SonarrSeries{ID: 31, Title: "Show AlsoNoTvdb", TvdbID: 0, Path: "/data/shows/also-no-tvdb"}
@@ -1110,18 +1107,12 @@ func TestSeriesTvdbIdFallbackDistinct(t *testing.T) {
 		t.Fatalf("got %d series, want 2", len(series))
 	}
 
-	tvdbMap := make(map[int64]bool)
+	// Após a correção B1, ambos devem manter TvdbID == 0 (campo ausente, não fabricado).
 	for _, s := range series {
-		if s.TvdbID <= 0 {
-			t.Errorf("series %q: tvdbId = %d, deve ser > 0 (fallback para ID interno)", s.Title, s.TvdbID)
+		if s.TvdbID != 0 {
+			t.Errorf("series %q: tvdbId = %d, esperado 0 (campo não fabricado)", s.Title, s.TvdbID)
 		}
-		if tvdbMap[s.TvdbID] {
-			t.Errorf("duplicação: tvdbId = %d compartilhado entre séries", s.TvdbID)
-		}
-		tvdbMap[s.TvdbID] = true
-	}
-	if len(tvdbMap) != 2 {
-		t.Errorf("tvdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tvdbMap))
+		// IDs internos (arr_media.id) devem permanecer distintos.
 	}
 }
 
