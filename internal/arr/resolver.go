@@ -107,7 +107,7 @@ func (r *TMDBResolver) resolveOnce(ctx context.Context) {
 			if e := entry.(*resolveCacheEntry); time.Now().Before(e.expiresAt) {
 				if e.tmdbID > 0 {
 					year := extractYearFrom(e.releaseDate)
-					if err := r.config.DB.UpsertARRMediaTMDB(ctx, media.ID, e.tmdbID, year); err != nil {
+					if err := r.config.DB.UpsertARRMediaTMDB(ctx, media.ID, e.tmdbID, year, e.title, e.posterPath, e.backdropPath); err != nil {
 						r.config.Logger.Printf("[TMDB resolver] upsert cache hit %s: %v", media.IMDBID, err)
 						errored++
 					} else {
@@ -160,7 +160,7 @@ func (r *TMDBResolver) resolveOnce(ctx context.Context) {
 		})
 
 		year := extractYearFrom(releaseDate)
-		if err := r.config.DB.UpsertARRMediaTMDB(ctx, media.ID, tmdbID, year); err != nil {
+		if err := r.config.DB.UpsertARRMediaTMDB(ctx, media.ID, tmdbID, year, title, posterPath, backdropPath); err != nil {
 			r.config.Logger.Printf("[TMDB resolver] upsert %s: %v", media.IMDBID, err)
 			errored++
 		} else {
@@ -270,4 +270,21 @@ func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (*resol
 		PosterPath:   posterPath,
 		BackdropPath: backdropPath,
 	}, nil
+}
+
+// PersistJITResult asynchronously persists a JIT resolution result to the
+// database. It is fire-and-forget (runs in a goroutine) to avoid blocking
+// the HTTP response.
+func (r *TMDBResolver) PersistJITResult(ctx context.Context, mediaID int64, res *resolveResult) {
+	go func() {
+		if res == nil || res.TmdbID <= 0 {
+			return
+		}
+		year := extractYearFrom(res.ReleaseDate)
+		if err := r.config.DB.UpsertARRMediaTMDB(ctx, mediaID, res.TmdbID, year, res.Title, res.PosterPath, res.BackdropPath); err != nil {
+			if r.config.Logger != nil {
+				r.config.Logger.Printf("[TMDB resolver] JIT persist %d: %v", mediaID, err)
+			}
+		}
+	}()
 }

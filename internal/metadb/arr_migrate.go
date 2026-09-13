@@ -46,3 +46,52 @@ func (d *DB) migrateARRMedia() error {
 	}
 	return nil
 }
+
+// migrateARRMediaTMDB adds the title, poster_path, and backdrop_path columns
+// to arr_media if they do not exist. Uses PRAGMA table_info for reliable column
+// detection instead of text parsing.
+func (d *DB) migrateARRMediaTMDB() error {
+	rows, err := d.db.Query("PRAGMA table_info(arr_media)")
+	if err != nil {
+		return fmt.Errorf("migrate arr_media tmdb: PRAGMA table_info: %w", err)
+	}
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("migrate arr_media tmdb: scan pragma: %w", err)
+		}
+		existing[name] = true
+	}
+	rows.Close()
+
+	// Add only columns that truly do not exist.
+	needed := []struct{ name, deflt string }{
+		{"title", "''"},
+		{"poster_path", "''"},
+		{"backdrop_path", "''"},
+	}
+	changed := false
+	for _, c := range needed {
+		if existing[c.name] {
+			continue
+		}
+		if _, err := d.db.Exec(
+			fmt.Sprintf("ALTER TABLE arr_media ADD COLUMN %s TEXT DEFAULT %s", c.name, c.deflt),
+		); err != nil {
+			return fmt.Errorf("migrate arr_media tmdb: ADD COLUMN %s: %w", c.name, err)
+		}
+		changed = true
+	}
+
+	if changed && d.logger != nil {
+		d.logger.Printf("[ARR Schema] Added title/poster_path/backdrop_path columns to arr_media")
+	}
+	return nil
+}

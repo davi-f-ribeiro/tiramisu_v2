@@ -178,10 +178,11 @@ func (d *DB) GetUnresolvedARRMedia(ctx context.Context) ([]UnresolvedMedia, erro
 	return result, rows.Err()
 }
 
-// UpsertARRMediaTMDB updates tmdb_id and year for a given arr_media row by ID.
-func (d *DB) UpsertARRMediaTMDB(ctx context.Context, mediaID, tmdbID int64, year int) error {
-	query := `UPDATE arr_media SET tmdb_id = $1, year = $2, updated_at = datetime('now') WHERE id = $3`
-	_, err := d.db.ExecContext(ctx, query, tmdbID, year, mediaID)
+// UpsertARRMediaTMDB updates tmdb_id, year, title, poster_path and backdrop_path for a given
+// arr_media row by ID.
+func (d *DB) UpsertARRMediaTMDB(ctx context.Context, mediaID, tmdbID int64, year int, title, posterPath, backdropPath string) error {
+	query := `UPDATE arr_media SET tmdb_id = $1, year = $2, title = $3, poster_path = $4, backdrop_path = $5, updated_at = datetime('now') WHERE id = $6`
+	_, err := d.db.ExecContext(ctx, query, tmdbID, year, title, posterPath, backdropPath, mediaID)
 	if err != nil {
 		return fmt.Errorf("metadb: upsert ARR media tmdb: %w", err)
 	}

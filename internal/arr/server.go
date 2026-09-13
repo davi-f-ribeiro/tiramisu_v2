@@ -513,6 +513,8 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 			}
 			m.PosterPath = res.PosterPath
 			m.BackdropPath = res.BackdropPath
+			// Persist to DB (fire-and-forget, non-blocking).
+			h.resolver.PersistJITResult(ctx, m.ID, res)
 		}
 	}
 
@@ -664,6 +666,7 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 				}
 				s.PosterPath = res.PosterPath
 				s.BackdropPath = res.BackdropPath
+				h.resolver.PersistJITResult(ctx, s.ID, res)
 			}
 		}
 		// Uniqueness fallback for Bazarr: tvdbId=0 would collide across
@@ -706,6 +709,7 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 			}
 			series.PosterPath = res.PosterPath
 			series.BackdropPath = res.BackdropPath
+			h.resolver.PersistJITResult(ctx, series.ID, res)
 		}
 	}
 	// Uniqueness fallback for Bazarr: tvdbId=0 uses unique internal ID.

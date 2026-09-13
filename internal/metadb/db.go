@@ -178,6 +178,9 @@ CREATE INDEX IF NOT EXISTS idx_arr_media_series ON arr_media(series_id);
 	if err := d.migrateARRMedia(); err != nil {
 		return err
 	}
+	if err := d.migrateARRMediaTMDB(); err != nil {
+		return err
+	}
 
 	// V750: Register schema versions
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'initial schema')`)

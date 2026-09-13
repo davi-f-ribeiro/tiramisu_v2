@@ -1400,3 +1400,82 @@ func TestSeriesDetail_TvdbIdFallbackZero(t *testing.T) {
 		t.Errorf("tvdbId = %d, want %d (fallback)", s.TvdbID, s.ID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 14. mountTMDBImages unit tests
+// ---------------------------------------------------------------------------
+
+func TestMountTMDBImages_MovieOnlyPoster(t *testing.T) {
+	m := &RadarrMovie{ID: 1, Title: "Movie", PosterPath: "/abc123.jpg"}
+	mountTMDBImages(m, m.PosterPath, m.BackdropPath)
+	if len(m.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(m.Images))
+	}
+	if m.Images[0].CoverType != "poster" {
+		t.Errorf("coverType = %q, want poster", m.Images[0].CoverType)
+	}
+	wantURL := "https://image.tmdb.org/t/p/w500/abc123.jpg"
+	if m.Images[0].URL != wantURL {
+		t.Errorf("url = %q, want %q", m.Images[0].URL, wantURL)
+	}
+}
+
+func TestMountTMDBImages_MoviePosterAndBackdrop(t *testing.T) {
+	m := &RadarrMovie{ID: 2, Title: "Movie2", PosterPath: "/poster.jpg", BackdropPath: "/back.jpg"}
+	mountTMDBImages(m, m.PosterPath, m.BackdropPath)
+	if len(m.Images) != 2 {
+		t.Fatalf("got %d images, want 2", len(m.Images))
+	}
+	if m.Images[0].CoverType != "poster" || m.Images[1].CoverType != "fanart" {
+		t.Errorf("coverTypes = [%q, %q], want [poster, fanart]", m.Images[0].CoverType, m.Images[1].CoverType)
+	}
+}
+
+func TestMountTMDBImages_SeriesOnlyPoster(t *testing.T) {
+	s := &SonarrSeries{ID: 1, Title: "Show", PosterPath: "/abc123.jpg"}
+	mountTMDBImages(s, s.PosterPath, s.BackdropPath)
+	if len(s.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(s.Images))
+	}
+	if s.Images[0].CoverType != "poster" {
+		t.Errorf("coverType = %q, want poster", s.Images[0].CoverType)
+	}
+}
+
+func TestMountTMDBImages_SeriesPosterAndBackdrop(t *testing.T) {
+	s := &SonarrSeries{ID: 2, Title: "Show2", PosterPath: "/poster.jpg", BackdropPath: "/back.jpg"}
+	mountTMDBImages(s, s.PosterPath, s.BackdropPath)
+	if len(s.Images) != 2 {
+		t.Fatalf("got %d images, want 2", len(s.Images))
+	}
+	if s.Images[0].CoverType != "poster" || s.Images[1].CoverType != "fanart" {
+		t.Errorf("coverTypes = [%q, %q], want [poster, fanart]", s.Images[0].CoverType, s.Images[1].CoverType)
+	}
+}
+
+func TestMountTMDBImages_EmptyPaths(t *testing.T) {
+	m := &RadarrMovie{ID: 3}
+	mountTMDBImages(m, "", "")
+	if len(m.Images) != 0 {
+		t.Errorf("images = %d, want 0 (empty paths)", len(m.Images))
+	}
+}
+
+func TestMountTMDBImages_JSONKeys(t *testing.T) {
+	m := &RadarrMovie{ID: 4, PosterPath: "/img.jpg"}
+	mountTMDBImages(m, m.PosterPath, "")
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(b)
+	if !strings.Contains(body, `"coverType"`) {
+		t.Error(`JSON missing key "coverType"`)
+	}
+	if !strings.Contains(body, `"url"`) {
+		t.Error(`JSON missing key "url"`)
+	}
+	if !strings.Contains(body, `"remoteUrl"`) {
+		t.Error(`JSON missing key "remoteUrl"`)
+	}
+}
