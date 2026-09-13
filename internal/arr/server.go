@@ -346,6 +346,49 @@ var defaultQuality = QualityModel{
 	},
 }
 
+// parseQualityFromFilename infers resolution and source from a media filename
+// so Bazarr indexes the exact release quality.
+func parseQualityFromFilename(filename string) QualityModel {
+	lower := strings.ToLower(filename)
+
+	res := 1080
+	resStr := "1080p"
+	if strings.Contains(lower, "2160p") || strings.Contains(lower, "4k") {
+		res = 2160
+		resStr = "2160p"
+	} else if strings.Contains(lower, "720p") {
+		res = 720
+		resStr = "720p"
+	} else if strings.Contains(lower, "480p") {
+		res = 480
+		resStr = "480p"
+	}
+
+	source := "webdl"
+	sourceName := "WEBDL"
+	if strings.Contains(lower, "bluray") || strings.Contains(lower, "remux") {
+		source = "bluray"
+		sourceName = "Bluray"
+	} else if strings.Contains(lower, "hdtv") {
+		source = "hdtv"
+		sourceName = "HDTV"
+	}
+
+	return QualityModel{
+		Quality: QualityDetail{
+			ID:         1,
+			Name:       fmt.Sprintf("%s-%s", sourceName, resStr),
+			Source:     source,
+			Resolution: res,
+		},
+		Revision: RevisionDetail{
+			Version:  1,
+			Real:     0,
+			IsRepack: false,
+		},
+	}
+}
+
 func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -455,15 +498,25 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 		m.HasFile = true
 		m.IsAvailable = true
 		m.Monitored = true
+
+		// Compute title fields Bazarr requires.
+		cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
+		m.SortTitle = strings.ToLower(cleanTitle)
+		m.CleanTitle = cleanTitle
+		m.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
+		m.Status = "released"
+
 		if m.MovieFile == nil && m.Path != "" {
 			fullPath := m.Path
+			basename := filepath.Base(fullPath)
 			m.MovieFile = &RadarrMovieFile{
 				ID:           m.ID,
 				MovieID:      m.ID,
-				RelativePath: filepath.Base(fullPath),
+				RelativePath: basename,
 				Path:         fullPath,
 				Size:         m.Size,
-				Quality:      defaultQuality,
+				DateAdded:    time.Now().UTC().Format(time.RFC3339),
+				Quality:      parseQualityFromFilename(basename),
 			}
 			// Directory path goes into m.Path.
 			m.Path = filepath.Dir(fullPath)
@@ -491,19 +544,25 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Populate movieFile subobject.
 	movie.HasFile = true
 	movie.IsAvailable = true
 	movie.Monitored = true
+	cleanTitle := strings.ReplaceAll(movie.Title, "_", " ")
+	movie.SortTitle = strings.ToLower(cleanTitle)
+	movie.CleanTitle = cleanTitle
+	movie.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
+	movie.Status = "released"
 	if movie.MovieFile == nil && movie.Path != "" {
 		fullPath := movie.Path
+		basename := filepath.Base(fullPath)
 		movie.MovieFile = &RadarrMovieFile{
 			ID:           movie.ID,
 			MovieID:      movie.ID,
-			RelativePath: filepath.Base(fullPath),
+			RelativePath: basename,
 			Path:         fullPath,
 			Size:         movie.Size,
-			Quality:      defaultQuality,
+			DateAdded:    time.Now().UTC().Format(time.RFC3339),
+			Quality:      parseQualityFromFilename(basename),
 		}
 		movie.Path = filepath.Dir(fullPath)
 	}
@@ -566,7 +625,6 @@ func (h *Handler) handleEpisodesBySeries(w http.ResponseWriter, r *http.Request)
 	if eps == nil {
 		eps = []*SonarrEpisode{}
 	}
-	// Populate episodeFile subobjects so Bazarr can resolve subtitle + video paths.
 	for i := range eps {
 		e := eps[i]
 		e.HasFile = true
@@ -574,14 +632,16 @@ func (h *Handler) handleEpisodesBySeries(w http.ResponseWriter, r *http.Request)
 		e.EpisodeFileID = e.ID
 		if e.EpisodeFile == nil && e.Path != "" {
 			fullPath := e.Path
+			basename := filepath.Base(fullPath)
 			e.EpisodeFile = &SonarrEpisodeFile{
 				ID:           e.ID,
 				SeriesID:     e.SeriesID,
 				SeasonNumber: e.SeasonNumber,
-				RelativePath: filepath.Base(fullPath),
+				RelativePath: basename,
 				Path:         fullPath,
 				Size:         e.Size,
-				Quality:      defaultQuality,
+				DateAdded:    time.Now().UTC().Format(time.RFC3339),
+				Quality:      parseQualityFromFilename(basename),
 			}
 		}
 	}
@@ -589,7 +649,6 @@ func (h *Handler) handleEpisodesBySeries(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) handleEpisodeFilesBySeries(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	seriesIDStr := r.URL.Query().Get("seriesId")
 	if seriesIDStr == "" {
 		jsonResponse(w, http.StatusOK, []*SonarrEpisodeFile{})
@@ -601,13 +660,21 @@ func (h *Handler) handleEpisodeFilesBySeries(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	files, err := h.store.GetEpisodeFilesBySeries(ctx, seriesID)
+	files, err := h.store.GetEpisodeFilesBySeries(r.Context(), seriesID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if files == nil {
 		files = []*SonarrEpisodeFile{}
+	}
+	for _, f := range files {
+		if f.RelativePath == "" && f.Path != "" {
+			f.RelativePath = filepath.Base(f.Path)
+		}
+		if f.Quality.Quality.Name == "" {
+			f.Quality = parseQualityFromFilename(f.RelativePath)
+		}
 	}
 	jsonResponse(w, http.StatusOK, files)
 }

@@ -58,6 +58,10 @@ type RadarrMovie struct {
 	ID              int64             `json:"id"`
 	Title           string            `json:"title"`
 	OriginalTitle   string            `json:"originalTitle"`
+	SortTitle       string            `json:"sortTitle"`
+	CleanTitle      string            `json:"cleanTitle"`
+	TitleSlug       string            `json:"titleSlug"`
+	Status          string            `json:"status"`
 	Year            int               `json:"year"`
 	Path            string            `json:"path"`
 	Monitored       bool              `json:"monitored"`

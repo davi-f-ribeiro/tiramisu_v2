@@ -894,3 +894,145 @@ func TestEpisodeFilesWithRelativePath(t *testing.T) {
 		t.Error("episodeFile.path is empty")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 10. parseQualityFromFilename unit tests
+// ---------------------------------------------------------------------------
+
+func TestParseQualityFromFilename_WEBDL_1080p(t *testing.T) {
+	q := parseQualityFromFilename("72_HOURS_2026_1080p_5.1_2301055d.mkv")
+	if q.Quality.Resolution != 1080 {
+		t.Errorf("resolution = %d, want 1080", q.Quality.Resolution)
+	}
+	if q.Quality.Name != "WEBDL-1080p" {
+		t.Errorf("quality.name = %q, want WEBDL-1080p", q.Quality.Name)
+	}
+	if q.Quality.Source != "webdl" {
+		t.Errorf("quality.source = %q, want webdl", q.Quality.Source)
+	}
+}
+
+func TestParseQualityFromFilename_2160p(t *testing.T) {
+	q := parseQualityFromFilename("Movie.Name.2024.2160p.WEBRip.x265.mkv")
+	if q.Quality.Resolution != 2160 {
+		t.Errorf("resolution = %d, want 2160", q.Quality.Resolution)
+	}
+	if q.Quality.Name != "WEBDL-2160p" {
+		t.Errorf("quality.name = %q, want WEBDL-2160p", q.Quality.Name)
+	}
+}
+
+func TestParseQualityFromFilename_Bluray(t *testing.T) {
+	q := parseQualityFromFilename("Show.S01E01.720p.BluRay.x264.mkv")
+	if q.Quality.Resolution != 720 {
+		t.Errorf("resolution = %d, want 720", q.Quality.Resolution)
+	}
+	if q.Quality.Name != "Bluray-720p" {
+		t.Errorf("quality.name = %q, want Bluray-720p", q.Quality.Name)
+	}
+}
+
+func TestParseQualityFromFilename_HDTV(t *testing.T) {
+	q := parseQualityFromFilename("Series.S01E05.480p.HDTV.x264.mkv")
+	if q.Quality.Resolution != 480 {
+		t.Errorf("resolution = %d, want 480", q.Quality.Resolution)
+	}
+	if q.Quality.Name != "HDTV-480p" {
+		t.Errorf("quality.name = %q, want HDTV-480p", q.Quality.Name)
+	}
+}
+
+func TestParseQualityFromFilename_4k(t *testing.T) {
+	q := parseQualityFromFilename("Movie.4K.Remux.mkv")
+	if q.Quality.Resolution != 2160 {
+		t.Errorf("resolution = %d, want 2160", q.Quality.Resolution)
+	}
+	if q.Quality.Source != "bluray" {
+		t.Errorf("quality.source = %q, want bluray (remux maps to bluray)", q.Quality.Source)
+	}
+}
+
+func TestParseQualityFromFilename_Default(t *testing.T) {
+	q := parseQualityFromFilename("Unknown.File.mp4")
+	if q.Quality.Resolution != 1080 {
+		t.Errorf("resolution = %d, want 1080 (default)", q.Quality.Resolution)
+	}
+	if q.Quality.Source != "webdl" {
+		t.Errorf("quality.source = %q, want webdl (default)", q.Quality.Source)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 11. sortTitle and cleanTitle assertions
+// ---------------------------------------------------------------------------
+
+func TestMovieSortTitle(t *testing.T) {
+	store := newMockStore()
+	store.movies[1] = &RadarrMovie{ID: 1, Title: "Some_Movie_2020", Year: 2020, Path: "/data/movies/some.movie.2020.mkv"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movies []*RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movies); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(movies) != 1 {
+		t.Fatalf("got %d movies, want 1", len(movies))
+	}
+	m := movies[0]
+	if m.SortTitle != "some movie 2020" {
+		t.Errorf("sortTitle = %q, want some movie 2020", m.SortTitle)
+	}
+	if m.CleanTitle != "Some Movie 2020" {
+		t.Errorf("cleanTitle = %q, want Some Movie 2020", m.CleanTitle)
+	}
+	if m.TitleSlug != "some-movie-2020" {
+		t.Errorf("titleSlug = %q, want some-movie-2020", m.TitleSlug)
+	}
+	if m.Status != "released" {
+		t.Errorf("status = %q, want released", m.Status)
+	}
+}
+
+func TestMovieDetailSortTitle(t *testing.T) {
+	store := newMockStore()
+	store.movies[42] = &RadarrMovie{
+		ID: 42, Title: "Movie_Name_2019", Year: 2019, Path: "/data/movies/movie.name.2019.mkv",
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie/42", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movie RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movie); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if movie.SortTitle != "movie name 2019" {
+		t.Errorf("sortTitle = %q, want movie name 2019", movie.SortTitle)
+	}
+	if movie.TitleSlug != "movie-name-2019" {
+		t.Errorf("titleSlug = %q, want movie-name-2019", movie.TitleSlug)
+	}
+	if movie.Status != "released" {
+		t.Errorf("status = %q, want released", movie.Status)
+	}
+}
