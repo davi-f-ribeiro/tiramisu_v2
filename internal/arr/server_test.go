@@ -272,8 +272,18 @@ func TestMovieList(t *testing.T) {
 	if len(movies) != 2 {
 		t.Fatalf("got %d movies, want 2", len(movies))
 	}
-	if movies[0].Title != "Movie A" {
-		t.Errorf("first movie title = %q, want Movie A", movies[0].Title)
+	// Check both movies exist regardless of map iteration order
+	foundA, foundB := false, false
+	for _, m := range movies {
+		if m.Title == "Movie A" {
+			foundA = true
+		}
+		if m.Title == "Movie B" {
+			foundB = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Errorf("expected both 'Movie A' and 'Movie B', got %v", movies)
 	}
 }
 

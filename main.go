@@ -51,6 +51,7 @@ import (
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/registry"
+	"tiramisu/internal/arr"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/syncer/engines"
 	syncer "tiramisu/internal/syncer"
@@ -4304,6 +4305,35 @@ func main() {
 	}
 
 	finishGlobalInodeMapInit(logger)
+
+	// ARR Virtual Catalog: register Servarr v3 API routes on the default mux,
+	// launch dedicated :7878 (:radarr) and :8989 (:sonarr) listeners, and start
+	// an async backfill so pre-existing stubs appear in the catalog.
+	if stateDB != nil {
+		arrStore := arr.NewDBStore(stateDB.SQL())
+		arrHandler := arr.NewHandler(arrStore)
+		arrHandler.RegisterRoutes(http.DefaultServeMux)
+
+		// Derive a cancellable context for ARR listeners; cancelled when
+		// backgroundStopChan fires so the HTTP servers shut down gracefully.
+		arrCtx, arrCancel := context.WithCancel(context.Background())
+		go func() {
+			<-backgroundStopChan
+			arrCancel()
+		}()
+
+		_ = arr.StartStandaloneListeners(arrCtx, arrStore)
+		logger.Printf("[ARR] Radarr/Sonarr API v3 facade active (ports :7878/:8989)")
+
+		// Async backfill: catalog pre-existing stubs in background
+		moviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
+		tvDir := filepath.Join(gc().PhysicalSourcePath, "tv")
+		go func() {
+			if err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger); err != nil {
+				logger.Printf("[ARR] backfill error: %v", err)
+			}
+		}()
+	}
 
 	// Pre-populate cache at startup to improve Plex scan performance.
 	cacheBuilder := NewStartupCacheBuilder(source, metaCache, logger)

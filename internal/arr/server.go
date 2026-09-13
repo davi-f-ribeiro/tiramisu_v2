@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // MediaStore provides data access for the HTTP API handler.
@@ -22,7 +23,7 @@ type MediaStore interface {
 	GetEpisodeFilesBySeries(ctx context.Context, seriesID int64) ([]*SonarrEpisodeFile, error)
 }
 
-// DBStore adapts *sql.DB to the MediaStore interface.
+// DBStore adapts *sql.DB to both MediaStore and MediaStoreWriter interfaces.
 type DBStore struct {
 	db *sql.DB
 }
@@ -31,6 +32,8 @@ type DBStore struct {
 func NewDBStore(db *sql.DB) *DBStore {
 	return &DBStore{db: db}
 }
+
+// --- MediaStore read methods ---
 
 // GetMovies returns all movies from arr_media.
 func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
@@ -73,6 +76,52 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	m.IsAvailable = true
 	m.Monitored = true
 	return &m, nil
+}
+
+// UpsertARRMovie inserts or updates a movie record (MediaStoreWriter).
+func (s *DBStore) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title string, year int, fullPath string, size int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO arr_media (media_type, tmdb_id, imdb_id, series_id, season_number, episode_number, title, year, path, size)
+		 VALUES ('movie', $1, $2, 0, 0, 0, $3, $4, $5, $6)
+		 ON CONFLICT(path) DO UPDATE SET
+			 tmdb_id=EXCLUDED.tmdb_id, imdb_id=EXCLUDED.imdb_id, series_id=0,
+			 season_number=0, episode_number=0, title=EXCLUDED.title,
+			 year=EXCLUDED.year, size=EXCLUDED.size, updated_at=datetime('now')`,
+		tmdbID, imdbID, title, year, fullPath, size)
+	return err
+}
+
+// UpsertARRSeries inserts or updates a series record and returns its id.
+func (s *DBStore) UpsertARRSeries(ctx context.Context, tmdbID, tvdbID int64, imdbID, title, seriesDir string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO arr_media (media_type, tmdb_id, tvdb_id, imdb_id, series_id, season_number, episode_number, title, path)
+		 VALUES ('series', $1, $2, $3, 0, 0, 0, $4, $5)
+		 ON CONFLICT(path) DO UPDATE SET
+			 tmdb_id=EXCLUDED.tmdb_id, tvdb_id=EXCLUDED.tvdb_id, imdb_id=EXCLUDED.imdb_id,
+			 title=EXCLUDED.title, updated_at=datetime('now')
+		 RETURNING id`,
+		tmdbID, tvdbID, imdbID, title, seriesDir).Scan(&id)
+	return id, err
+}
+
+// UpsertARREpisode inserts or updates an episode record.
+func (s *DBStore) UpsertARREpisode(ctx context.Context, seriesID int64, season, episode int, title, fullPath string, size int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO arr_media (media_type, series_id, season_number, episode_number, title, path, size)
+		 VALUES ('episode', $1, $2, $3, $4, $5, $6)
+		 ON CONFLICT(path) DO UPDATE SET
+			 series_id=EXCLUDED.series_id, season_number=EXCLUDED.season_number,
+			 episode_number=EXCLUDED.episode_number, title=EXCLUDED.title,
+			 size=EXCLUDED.size, updated_at=datetime('now')`,
+		seriesID, season, episode, title, fullPath, size)
+	return err
+}
+
+// DeleteARRMediaByPath removes a record by its path.
+func (s *DBStore) DeleteARRMediaByPath(ctx context.Context, fullPath string) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM arr_media WHERE path = $1", fullPath)
+	return err
 }
 
 // GetSeries returns all series from arr_media.
@@ -389,16 +438,27 @@ func (h *Handler) handleEpisodeFilesBySeries(w http.ResponseWriter, r *http.Requ
 	jsonResponse(w, http.StatusOK, files)
 }
 
+// arrServers holds references to the Radarr and Sonarr HTTP servers
+// so they can be gracefully shut down on context cancellation.
+type arrServers struct {
+	radarrSrv *http.Server
+	sonarrSrv *http.Server
+}
+
 // StartStandaloneListeners launches Radarr (7878) and Sonarr (8989) HTTP
 // servers in background goroutines so Bazarr can target distinct ports.
-func StartStandaloneListeners(ctx context.Context, store MediaStore) {
+// Returns an arrServers struct so the caller can perform graceful shutdown.
+func StartStandaloneListeners(ctx context.Context, store MediaStore) *arrServers {
+	radarrSrv := &http.Server{Addr: ":7878"}
+	sonarrSrv := &http.Server{Addr: ":8989"}
+
 	go func() {
 		mux := http.NewServeMux()
 		h := NewHandler(store)
 		h.RegisterRoutes(mux)
-		srv := &http.Server{Addr: ":7878", Handler: mux}
+		radarrSrv.Handler = mux
 		log.Printf("[arr] starting Radarr server on :7878")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := radarrSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[arr] radarr server error: %v", err)
 		}
 	}()
@@ -407,13 +467,22 @@ func StartStandaloneListeners(ctx context.Context, store MediaStore) {
 		mux := http.NewServeMux()
 		h := NewHandler(store, "Sonarr")
 		h.RegisterRoutes(mux)
-		srv := &http.Server{Addr: ":8989", Handler: mux}
+		sonarrSrv.Handler = mux
 		log.Printf("[arr] starting Sonarr server on :8989")
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := sonarrSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("[arr] sonarr server error: %v", err)
 		}
 	}()
 
-	<-ctx.Done()
-	log.Println("[arr] stopping standalone listeners")
+	go func() {
+		<-ctx.Done()
+		log.Println("[arr] stopping standalone listeners")
+		// Graceful shutdown with 5s timeout
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		radarrSrv.Shutdown(shutdownCtx)
+		sonarrSrv.Shutdown(shutdownCtx)
+	}()
+
+	return &arrServers{radarrSrv: radarrSrv, sonarrSrv: sonarrSrv}
 }
