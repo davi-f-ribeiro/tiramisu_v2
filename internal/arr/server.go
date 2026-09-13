@@ -283,6 +283,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v3/rootfolder", h.handleRootFolder)
 	mux.HandleFunc("GET /api/v3/qualityprofile", h.handleQualityProfile)
 	mux.HandleFunc("GET /api/v3/tag", h.handleTag)
+	mux.HandleFunc("GET /api/v3/languageprofile", h.handleEmptyArray)
 	mux.HandleFunc("GET /api/v3/movie", h.handleMovieList)
 	mux.HandleFunc("/api/v3/movie/", h.handleMovieDetail)
 	mux.HandleFunc("GET /api/v3/series", h.handleSeriesList)
@@ -295,6 +296,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rootfolder", h.handleRootFolder)
 	mux.HandleFunc("/api/qualityprofile", h.handleQualityProfile)
 	mux.HandleFunc("/api/tag", h.handleTag)
+	mux.HandleFunc("/api/languageprofile", h.handleEmptyArray)
 	mux.HandleFunc("/api/movie", h.handleMovieList)
 	mux.HandleFunc("/api/movie/", h.handleMovieDetail)
 	mux.HandleFunc("/api/series", h.handleSeriesList)
@@ -307,8 +309,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/arr/sync", h.handleManualSync)
 
 	// SignalR Handshake/Negotiate (evita HubError no Bazarr)
+	// Legacy paths
 	mux.HandleFunc("/signalr/negotiate", h.handleSignalRNegotiate)
 	mux.HandleFunc("/signalr", h.handleSignalRNegotiate)
+	// V3 paths (Bazarr signalrcore library uses negotiateVersion=1)
+	mux.HandleFunc("/api/v3/signalr/negotiate", h.handleSignalRNegotiate)
+	mux.HandleFunc("/api/v3/signalr", h.handleSignalRNegotiate)
 
 	// Endpoints adicionais que o Bazarr consulta no sync
 	mux.HandleFunc("/api/v3/command", h.handleEmptyArray)
@@ -548,6 +554,9 @@ func (h *Handler) handleSignalRNegotiate(w http.ResponseWriter, r *http.Request)
 		"ProtocolVersion":         "1.4",
 		"TransportConnectTimeout": 5.0,
 		"LongPollDelay":           0.0,
+		"negotiateVersion":        1,
+		"connectionId":            "tiramisu-dummy-id",
+		"availableTransports":     []map[string]any{},
 	}
 	jsonResponse(w, http.StatusOK, res)
 }

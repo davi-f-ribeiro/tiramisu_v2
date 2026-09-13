@@ -529,3 +529,175 @@ func TestEpisodeFilesEmpty(t *testing.T) {
 		t.Errorf("no seriesId episodefile body = %q, want []", body)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 6. Language profile — empty array (Sonarr)
+// ---------------------------------------------------------------------------
+
+func TestLanguageProfileEmpty(t *testing.T) {
+	h := newTestHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	testEmptyEndpoint(t, mux, "/api/v3/languageprofile")
+}
+
+func TestLanguageProfileLegacyEmpty(t *testing.T) {
+	h := newTestHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	testEmptyEndpoint(t, mux, "/api/languageprofile")
+}
+
+// ---------------------------------------------------------------------------
+// 7. SignalR negotiate — both legacy and /api/v3/ paths
+// ---------------------------------------------------------------------------
+
+func TestSignalRNegotiateLegacy(t *testing.T) {
+	h := newTestHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	for _, path := range []string{"/signalr/negotiate", "/signalr"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", path, nil)
+		mux.ServeHTTP(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("path %q: status = %d, want 200", path, w.Code)
+			continue
+		}
+
+		ct := w.Header().Get("Content-Type")
+		if ct != "application/json; charset=utf-8" {
+			t.Errorf("path %q: Content-Type = %q", path, ct)
+		}
+
+		var res map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("path %q: json decode: %v", path, err)
+		}
+		if res["negotiateVersion"] == nil {
+			t.Errorf("path %q: missing negotiateVersion field", path)
+		}
+		if res["connectionId"] == nil {
+			t.Errorf("path %q: missing connectionId field", path)
+		}
+		if avail, ok := res["availableTransports"].([]any); ok {
+			// Must be present (even if empty slice)
+			_ = avail
+		} else {
+			t.Errorf("path %q: availableTransports not []any", path)
+		}
+	}
+}
+
+func TestSignalRNegotiateV3(t *testing.T) {
+	h := newTestHandler()
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	for _, path := range []string{"/api/v3/signalr/negotiate", "/api/v3/signalr"} {
+		reqURL := path
+		if path == "/api/v3/signalr/negotiate" {
+			reqURL = path + "?negotiateVersion=1"
+		}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", reqURL, nil)
+		mux.ServeHTTP(w, r)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("path %q: status = %d, want 200", path, w.Code)
+			continue
+		}
+
+		var res map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("path %q: json decode: %v", path, err)
+		}
+		if nv, ok := res["negotiateVersion"].(float64); !ok || nv != 1 {
+			t.Errorf("path %q: negotiateVersion = %v, want 1", path, res["negotiateVersion"])
+		}
+		if res["connectionId"] == nil {
+			t.Errorf("path %q: missing connectionId", path)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 8. Sonarr-specific: system status on port 8989 via /api/v3/ routes
+// ---------------------------------------------------------------------------
+
+func TestSonarrSystemStatusOnPort(t *testing.T) {
+	h := NewHandler(newMockStore(), WithAppName("Sonarr"))
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/system/status", nil)
+	r.Host = "localhost:8989"
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp SystemStatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if resp.AppName != "Sonarr" {
+		t.Errorf("appName = %q, want Sonarr", resp.AppName)
+	}
+	if resp.Version == "" {
+		t.Error("version should not be empty")
+	}
+}
+
+func TestSonarrSeriesListOnPort(t *testing.T) {
+	store := newMockStore()
+	store.series[1] = &SonarrSeries{ID: 1, Title: "Show X", TvdbID: 555, Path: "/data/shows/x"}
+
+	h := NewHandler(store, WithAppName("Sonarr"))
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series", nil)
+	r.Host = "localhost:8989"
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var series []*SonarrSeries
+	if err := json.Unmarshal(w.Body.Bytes(), &series); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(series) != 1 || series[0].Title != "Show X" {
+		t.Errorf("series = %+v", series)
+	}
+}
+
+func TestSonarrSignalRNegotiateV3(t *testing.T) {
+	store := newMockStore()
+	h := NewHandler(store, WithAppName("Sonarr"))
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/signalr/negotiate?negotiateVersion=1", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var res map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if nv, ok := res["negotiateVersion"].(float64); !ok || nv != 1 {
+		t.Errorf("negotiateVersion = %v, want 1", res["negotiateVersion"])
+	}
+}
