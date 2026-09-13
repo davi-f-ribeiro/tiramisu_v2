@@ -274,14 +274,17 @@ func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (*resol
 
 // PersistJITResult asynchronously persists a JIT resolution result to the
 // database. It is fire-and-forget (runs in a goroutine) to avoid blocking
-// the HTTP response.
-func (r *TMDBResolver) PersistJITResult(ctx context.Context, mediaID int64, res *resolveResult) {
+// the HTTP response. Uses its own detached context with a 10s timeout.
+func (r *TMDBResolver) PersistJITResult(mediaID int64, res *resolveResult) {
 	go func() {
 		if res == nil || res.TmdbID <= 0 {
 			return
 		}
+		pctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
 		year := extractYearFrom(res.ReleaseDate)
-		if err := r.config.DB.UpsertARRMediaTMDB(ctx, mediaID, res.TmdbID, year, res.Title, res.PosterPath, res.BackdropPath); err != nil {
+		if err := r.config.DB.UpsertARRMediaTMDB(pctx, mediaID, res.TmdbID, year, res.Title, res.PosterPath, res.BackdropPath); err != nil {
 			if r.config.Logger != nil {
 				r.config.Logger.Printf("[TMDB resolver] JIT persist %d: %v", mediaID, err)
 			}
