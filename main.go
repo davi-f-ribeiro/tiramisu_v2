@@ -61,6 +61,7 @@ import (
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
+	tmdbpkg "tiramisu/internal/catalog/tmdb"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -4385,6 +4386,19 @@ func main() {
 		} else {
 			logger.Printf("[ARR] backfill done: %d movies, %d series, %d eps (%dms)",
 				stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
+		}
+
+		// Start TMDB metadata resolver in background to populate missing
+		// tmdb_id / year for records that have an imdb_id but no tmdb_id.
+		if cfg.TMDBAPIKey != "" && stateDB != nil {
+			resolver := arr.NewTMDBResolver(&arr.ResolveConfig{
+				Client:    tmdbpkg.NewClient(cfg.TMDBAPIKey),
+				DB:        stateDB,
+				Logger:    logger,
+				MaxRetry:  3,
+				RetryDelay: 2 * time.Second,
+			})
+			resolver.Run(arrCtx)
 		}
 	}
 

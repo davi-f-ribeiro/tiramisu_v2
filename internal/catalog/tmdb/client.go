@@ -30,6 +30,51 @@ func NewClient(apiKey string) *Client {
 		apiKey:  apiKey,
 	}
 }
+// FindResult is the parsed response from the /find/{imdb_id} endpoint.
+type FindResult struct {
+	MovieResults []struct {
+		ID          int    `json:"id"`
+		ReleaseDate string `json:"release_date"`
+	} `json:"movie_results"`
+	TVResults []struct {
+		ID           int    `json:"id"`
+		FirstAirDate string `json:"first_air_date"`
+	} `json:"tv_results"`
+}
+
+// FindByIMDbID resolves an IMDb ID to a TMDB ID and release date.
+func (c *Client) FindByIMDbID(ctx context.Context, imdbID string) (int64, string, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return 0, "", err
+	}
+
+	urlStr := fmt.Sprintf("%s/find/%s?api_key=%s&external_source=imdb_id", baseURL, imdbID, c.apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return 0, "", err
+	}
+
+	resp, err := catalog.Do(ctx, c.http, req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+
+	var result FindResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, "", err
+	}
+
+	if len(result.MovieResults) > 0 {
+		return int64(result.MovieResults[0].ID), result.MovieResults[0].ReleaseDate, nil
+	}
+	if len(result.TVResults) > 0 {
+		return int64(result.TVResults[0].ID), result.TVResults[0].FirstAirDate, nil
+	}
+	return 0, "", nil
+}
+
+
 
 // Movie is a minimal movie entry from TMDB discover/search.
 type Movie struct {
