@@ -39,7 +39,7 @@ type stubMeta struct {
 
 // MediaStoreWriter defines the write operations needed by RunBackfill.
 type MediaStoreWriter interface {
-	UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title string, year int, fullPath string, size int64) error
+	UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title, rawTitle string, year int, fullPath string, size int64) error
 	UpsertARRSeries(ctx context.Context, tmdbID, tvdbID int64, imdbID, title, seriesDir string) (int64, error)
 	UpsertARREpisode(ctx context.Context, seriesID int64, season, episode int, title, fullPath string, size int64) error
 }
@@ -137,7 +137,10 @@ func backfillMovies(ctx context.Context, dir string, db MediaStoreWriter, logger
 			year = extractYear(info.Name())
 		}
 
-		if err := db.UpsertARRMovie(ctx, int64(tmdbID), imdbID, title, year, path, meta.Size); err != nil {
+		// raw_title = original release name (full filename without extension)
+		rawTitle := strings.TrimSuffix(info.Name(), filepath.Ext(info.Name()))
+
+		if err := db.UpsertARRMovie(ctx, int64(tmdbID), imdbID, title, rawTitle, year, path, meta.Size); err != nil {
 			logger.Printf("[ARR backfill] movie %s: %v", filepath.Base(path), err)
 		} else {
 			stats.MoviesIndexed++

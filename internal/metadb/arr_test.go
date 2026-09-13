@@ -25,7 +25,7 @@ func TestUpsertARRMovie(t *testing.T) {
 		title = "Example Movie"
 	)
 
-	if err := d.UpsertARRMovie(ctx, 12345, "tt0000000", title, 2023, path, 1024*1024*500); err != nil {
+	if err := d.UpsertARRMovie(ctx, 12345, "tt0000000", title, title, 2023, path, 1024*1024*500); err != nil {
 		t.Fatalf("UpsertARRMovie: %v", err)
 	}
 
@@ -61,12 +61,12 @@ func TestUpsertARRMovieIdempotent(t *testing.T) {
 	path := "/data/movies/Example (2023)/example.mkv"
 
 	// First insert
-	if err := d.UpsertARRMovie(ctx, 12345, "tt0000000", "Example Movie", 2023, path, 500*1024*1024); err != nil {
+	if err := d.UpsertARRMovie(ctx, 12345, "tt0000000", "Example Movie", "Example Movie", 2023, path, 500*1024*1024); err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
 
 	// Second insert same path with different data — should UPDATE
-	if err := d.UpsertARRMovie(ctx, 99999, "tt9999999", "Updated Movie", 2024, path, 800*1024*1024); err != nil {
+	if err := d.UpsertARRMovie(ctx, 99999, "tt9999999", "Updated Movie", "Updated Movie", 2024, path, 800*1024*1024); err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
 
@@ -283,7 +283,7 @@ func TestDeleteARRMediaByPath(t *testing.T) {
 
 	path := "/data/movies/Example (2023)/example.mkv"
 
-	if err := d.UpsertARRMovie(ctx, 12345, "tt0000000", "Example Movie", 2023, path, 500*1024*1024); err != nil {
+	if err := d.UpsertARRMovie(ctx, 12345, "tt0000000", "Example Movie", "Example Movie", 2023, path, 500*1024*1024); err != nil {
 		t.Fatalf("upsert before delete: %v", err)
 	}
 
@@ -320,7 +320,7 @@ func TestResourceCleanup(t *testing.T) {
 		ctx := context.Background()
 
 		path := "/data/test/resource_cleanup.mkv"
-		if err := d.UpsertARRMovie(ctx, 1, "tt1", "Test", 2024, path, 100); err != nil {
+		if err := d.UpsertARRMovie(ctx, 1, "tt1", "Test", "Test", 2024, path, 100); err != nil {
 			t.Fatalf("iteration %d: %v", i, err)
 		}
 
@@ -344,7 +344,7 @@ func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	err := d.UpsertARRMovie(ctx, 1, "tt1", "Test", 2024, "/cancel/test.mkv", 100)
+	err := d.UpsertARRMovie(ctx, 1, "tt1", "Test", "Test", 2024, "/cancel/test.mkv", 100)
 	if err == nil {
 		t.Log("expected error for cancelled context (may succeed depending on sqlite implementation)")
 	}
@@ -377,7 +377,7 @@ func TestUpsertARRMovieZeroValues(t *testing.T) {
 	ctx := context.Background()
 
 	path := "/data/movies/zero_values/zero.mkv"
-	if err := d.UpsertARRMovie(ctx, 0, "", "Zero Movie", 0, path, 0); err != nil {
+	if err := d.UpsertARRMovie(ctx, 0, "", "Zero Movie", "Zero Movie", 0, path, 0); err != nil {
 		t.Fatalf("UpsertARRMovie zero values: %v", err)
 	}
 

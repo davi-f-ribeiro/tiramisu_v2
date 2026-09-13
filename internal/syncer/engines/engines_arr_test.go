@@ -29,6 +29,7 @@ func newMockARRDB(t *testing.T) *mockARRDB {
 			tmdb_id INTEGER DEFAULT 0,
 			tvdb_id INTEGER DEFAULT 0,
 			imdb_id TEXT DEFAULT '',
+			raw_title TEXT DEFAULT '',
 			series_id INTEGER DEFAULT 0,
 			season_number INTEGER DEFAULT 0,
 			episode_number INTEGER DEFAULT 0,
@@ -47,15 +48,15 @@ func newMockARRDB(t *testing.T) *mockARRDB {
 	return &mockARRDB{db: db}
 }
 
-func (m *mockARRDB) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title string, year int, fullPath string, size int64) error {
+func (m *mockARRDB) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title, rawTitle string, year int, fullPath string, size int64) error {
 	_, err := m.db.ExecContext(ctx,
-		`INSERT INTO arr_media (media_type, tmdb_id, imdb_id, series_id, season_number, episode_number, title, year, path, size)
-		 VALUES ('movie', $1, $2, 0, 0, 0, $3, $4, $5, $6)
+		`INSERT INTO arr_media (media_type, tmdb_id, imdb_id, raw_title, series_id, season_number, episode_number, title, year, path, size)
+		 VALUES ('movie', $1, $2, $3, 0, 0, 0, $4, $5, $6, $7)
 		 ON CONFLICT(path) DO UPDATE SET
-			 tmdb_id=EXCLUDED.tmdb_id, imdb_id=EXCLUDED.imdb_id, series_id=0,
-			 season_number=0, episode_number=0, title=EXCLUDED.title,
-			 year=EXCLUDED.year, size=EXCLUDED.size, updated_at=datetime('now')`,
-		tmdbID, imdbID, title, year, fullPath, size)
+		 tmdb_id=EXCLUDED.tmdb_id, imdb_id=EXCLUDED.imdb_id, raw_title=EXCLUDED.raw_title, series_id=0,
+		 season_number=0, episode_number=0, title=EXCLUDED.title,
+		 year=EXCLUDED.year, size=EXCLUDED.size, updated_at=datetime('now')`,
+		tmdbID, imdbID, rawTitle, title, year, fullPath, size)
 	return err
 }
 
@@ -132,7 +133,7 @@ func TestMovieARRLifecycle(t *testing.T) {
 	defer mock.Close()
 
 	// 1. Inserção de filme
-	err := mock.UpsertARRMovie(ctx, 12345, "tt0111111", "The Shawshank Redemption", 1994, "/data/movies/The Shawshank Redemption (1994).mkv", 2147483648)
+	err := mock.UpsertARRMovie(ctx, 12345, "tt0111111", "The Shawshank Redemption", "The Shawshank Redemption (1994)", 1994, "/data/movies/The Shawshank Redemption (1994).mkv", 2147483648)
 	if err != nil {
 		t.Fatalf("UpsertARRMovie failed: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestMovieARRLifecycle(t *testing.T) {
 	}
 
 	// 3. Update idempotente pelo mesmo path
-	err = mock.UpsertARRMovie(ctx, 12345, "tt0111111", "The Shawshank Redemption", 1994, "/data/movies/The Shawshank Redemption (1994).mkv", 3221225472)
+	err = mock.UpsertARRMovie(ctx, 12345, "tt0111111", "The Shawshank Redemption", "The Shawshank Redemption (1994)", 1994, "/data/movies/The Shawshank Redemption (1994).mkv", 3221225472)
 	if err != nil {
 		t.Fatalf("second UpsertARRMovie failed: %v", err)
 	}
@@ -297,7 +298,7 @@ func TestARRFieldsIntegrity(t *testing.T) {
 	defer mock.Close()
 
 	// Inserir filme com todos os campos
-	err := mock.UpsertARRMovie(ctx, 550, "tt0944947", "Game of Thrones", 2011, "/data/movies/Game of Thrones.mkv", 4294967296)
+	err := mock.UpsertARRMovie(ctx, 550, "tt0944947", "Game of Thrones", "Game of Thrones", 2011, "/data/movies/Game of Thrones.mkv", 4294967296)
 	if err != nil {
 		t.Fatalf("UpsertARRMovie failed: %v", err)
 	}

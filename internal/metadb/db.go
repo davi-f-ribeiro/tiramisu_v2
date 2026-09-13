@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS arr_media (
     tmdb_id          INTEGER DEFAULT 0,
     tvdb_id          INTEGER DEFAULT 0,
     imdb_id          TEXT DEFAULT '',
+    raw_title        TEXT DEFAULT '',
     series_id        INTEGER DEFAULT 0,
     season_number    INTEGER DEFAULT 0,
     episode_number   INTEGER DEFAULT 0,

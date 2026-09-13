@@ -900,7 +900,7 @@ func TestEpisodeFilesWithRelativePath(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseQualityFromFilename_WEBDL_1080p(t *testing.T) {
-	q := parseQualityFromFilename("72_HOURS_2026_1080p_5.1_2301055d.mkv")
+	q := parseQualityFromFilename("", "72_HOURS_2026_1080p_5.1_2301055d.mkv")
 	if q.Quality.Resolution != 1080 {
 		t.Errorf("resolution = %d, want 1080", q.Quality.Resolution)
 	}
@@ -913,17 +913,20 @@ func TestParseQualityFromFilename_WEBDL_1080p(t *testing.T) {
 }
 
 func TestParseQualityFromFilename_2160p(t *testing.T) {
-	q := parseQualityFromFilename("Movie.Name.2024.2160p.WEBRip.x265.mkv")
+	q := parseQualityFromFilename("", "Movie.Name.2024.2160p.WEBRip.x265.mkv")
 	if q.Quality.Resolution != 2160 {
 		t.Errorf("resolution = %d, want 2160", q.Quality.Resolution)
 	}
-	if q.Quality.Name != "WEBDL-2160p" {
-		t.Errorf("quality.name = %q, want WEBDL-2160p", q.Quality.Name)
+	if q.Quality.Name != "WEBRip-2160p" {
+		t.Errorf("quality.name = %q, want WEBRip-2160p", q.Quality.Name)
+	}
+	if q.Quality.Source != "webrip" {
+		t.Errorf("quality.source = %q, want webrip", q.Quality.Source)
 	}
 }
 
 func TestParseQualityFromFilename_Bluray(t *testing.T) {
-	q := parseQualityFromFilename("Show.S01E01.720p.BluRay.x264.mkv")
+	q := parseQualityFromFilename("", "Show.S01E01.720p.BluRay.x264.mkv")
 	if q.Quality.Resolution != 720 {
 		t.Errorf("resolution = %d, want 720", q.Quality.Resolution)
 	}
@@ -933,7 +936,7 @@ func TestParseQualityFromFilename_Bluray(t *testing.T) {
 }
 
 func TestParseQualityFromFilename_HDTV(t *testing.T) {
-	q := parseQualityFromFilename("Series.S01E05.480p.HDTV.x264.mkv")
+	q := parseQualityFromFilename("", "Series.S01E05.480p.HDTV.x264.mkv")
 	if q.Quality.Resolution != 480 {
 		t.Errorf("resolution = %d, want 480", q.Quality.Resolution)
 	}
@@ -943,7 +946,7 @@ func TestParseQualityFromFilename_HDTV(t *testing.T) {
 }
 
 func TestParseQualityFromFilename_4k(t *testing.T) {
-	q := parseQualityFromFilename("Movie.4K.Remux.mkv")
+	q := parseQualityFromFilename("", "Movie.4K.Remux.mkv")
 	if q.Quality.Resolution != 2160 {
 		t.Errorf("resolution = %d, want 2160", q.Quality.Resolution)
 	}
@@ -953,7 +956,7 @@ func TestParseQualityFromFilename_4k(t *testing.T) {
 }
 
 func TestParseQualityFromFilename_Default(t *testing.T) {
-	q := parseQualityFromFilename("Unknown.File.mp4")
+	q := parseQualityFromFilename("", "Unknown.File.mp4")
 	if q.Quality.Resolution != 1080 {
 		t.Errorf("resolution = %d, want 1080 (default)", q.Quality.Resolution)
 	}
@@ -1119,5 +1122,42 @@ func TestSeriesTvdbIdFallbackDistinct(t *testing.T) {
 	}
 	if len(tvdbMap) != 2 {
 		t.Errorf("tvdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tvdbMap))
+	}
+}
+
+func TestParseQualityFromFilename_RawTitle_Prioritized(t *testing.T) {
+	// rawTitle has Remux, fileName has no quality — should use rawTitle
+	q := parseQualityFromFilename("Movie.Name.2025.UHD.BluRay.2160p.Remux", "file.mkv")
+	if q.Quality.Source != "bluray" {
+		t.Errorf("source = %q, want bluray (remux from rawTitle)", q.Quality.Source)
+	}
+	if q.Quality.Name != "Remux-2160p" {
+		t.Errorf("quality.name = %q, want Remux-2160p", q.Quality.Name)
+	}
+	if q.Quality.Resolution != 2160 {
+		t.Errorf("resolution = %d, want 2160", q.Quality.Resolution)
+	}
+}
+
+func TestParseQualityFromFilename_RawTitle_WebRip(t *testing.T) {
+	q := parseQualityFromFilename("Series.2024.S01E01.1080p.WEBRip.x265", "episode.mkv")
+	if q.Quality.Source != "webrip" {
+		t.Errorf("source = %q, want webrip", q.Quality.Source)
+	}
+	if q.Quality.Name != "WEBRip-1080p" {
+		t.Errorf("quality.name = %q, want WEBRip-1080p", q.Quality.Name)
+	}
+	if q.Quality.Resolution != 1080 {
+		t.Errorf("resolution = %d, want 1080", q.Quality.Resolution)
+	}
+}
+
+func TestParseQualityFromFilename_RawTitle_Bdrip(t *testing.T) {
+	q := parseQualityFromFilename("Movie.2023.720p.BDRip.x264", "file.mkv")
+	if q.Quality.Source != "bluray" {
+		t.Errorf("source = %q, want bluray (bdrip maps to bluray)", q.Quality.Source)
+	}
+	if q.Quality.Name != "Bluray-720p" {
+		t.Errorf("quality.name = %q, want Bluray-720p", q.Quality.Name)
 	}
 }

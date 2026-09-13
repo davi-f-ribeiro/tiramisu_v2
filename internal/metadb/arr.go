@@ -9,13 +9,14 @@ import (
 
 // UpsertARRMovie inserts or updates a movie record in arr_media.
 // media_type = 'movie', series_id = 0, season/episode = 0.
-func (d *DB) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title string, year int, fullPath string, size int64) error {
+func (d *DB) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title, rawTitle string, year int, fullPath string, size int64) error {
 	query := `INSERT INTO arr_media
-		(media_type, tmdb_id, imdb_id, series_id, season_number, episode_number, title, year, path, size)
-	VALUES ('movie', $1, $2, 0, 0, 0, $3, $4, $5, $6)
+		(media_type, tmdb_id, imdb_id, raw_title, series_id, season_number, episode_number, title, year, path, size)
+	VALUES ('movie', $1, $2, $3, 0, 0, 0, $4, $5, $6, $7)
 	ON CONFLICT(path) DO UPDATE SET
 		tmdb_id       = EXCLUDED.tmdb_id,
 		imdb_id       = EXCLUDED.imdb_id,
+		raw_title     = EXCLUDED.raw_title,
 		series_id     = 0,
 		season_number = 0,
 		episode_number = 0,
@@ -24,7 +25,7 @@ func (d *DB) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title str
 		size          = EXCLUDED.size,
 		updated_at    = datetime('now')`
 
-	_, err := d.db.ExecContext(ctx, query, tmdbID, imdbID, title, year, fullPath, size)
+	_, err := d.db.ExecContext(ctx, query, tmdbID, imdbID, rawTitle, title, year, fullPath, size)
 	if err != nil {
 		return fmt.Errorf("metadb: upsert ARR movie: %w", err)
 	}
@@ -93,6 +94,7 @@ type ARRMovie struct {
 	ID        int64
 	TMDBID    int64
 	IMDBID    string
+	RawTitle  string
 	Title     string
 	Year      int
 	Size      int64
@@ -103,11 +105,11 @@ type ARRMovie struct {
 // GetARRMovieByPath reads a movie record by its full path.
 func (d *DB) GetARRMovieByPath(ctx context.Context, path string) (*ARRMovie, error) {
 	row := d.db.QueryRowContext(ctx,
-		"SELECT id, tmdb_id, imdb_id, title, year, size, path, updated_at FROM arr_media WHERE path = $1 AND media_type = 'movie'", path)
+		"SELECT id, tmdb_id, imdb_id, raw_title, title, year, size, path, updated_at FROM arr_media WHERE path = $1 AND media_type = 'movie'", path)
 
 	var m ARRMovie
 	var updatedAt string
-	err := row.Scan(&m.ID, &m.TMDBID, &m.IMDBID, &m.Title, &m.Year, &m.Size, &m.Path, &updatedAt)
+	err := row.Scan(&m.ID, &m.TMDBID, &m.IMDBID, &m.RawTitle, &m.Title, &m.Year, &m.Size, &m.Path, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("metadb: arr movie not found: %q", path)
 	}

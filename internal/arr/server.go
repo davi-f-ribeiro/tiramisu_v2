@@ -39,7 +39,7 @@ func NewDBStore(db *sql.DB) *DBStore {
 // GetMovies returns all movies from arr_media.
 func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, year, path, tmdb_id, imdb_id, size, updated_at
+		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at
 		FROM arr_media WHERE media_type = 'movie' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get movies: %w", err)
@@ -51,7 +51,7 @@ func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 		var updatedAt string
 		var m RadarrMovie
 		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Path,
-			&m.TmdbID, &m.ImdbID, &m.Size, &updatedAt); err != nil {
+			&m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt); err != nil {
 			return nil, fmt.Errorf("arr: scan movie: %w", err)
 		}
 		m.HasFile = true
@@ -67,9 +67,9 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	var m RadarrMovie
 	var updatedAt string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, year, path, tmdb_id, imdb_id, size, updated_at
+		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at
 		FROM arr_media WHERE id = $1 AND media_type = 'movie'`, id).
-		Scan(&m.ID, &m.Title, &m.Year, &m.Path, &m.TmdbID, &m.ImdbID, &m.Size, &updatedAt)
+		Scan(&m.ID, &m.Title, &m.Year, &m.Path, &m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -79,16 +79,15 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	return &m, nil
 }
 
-// UpsertARRMovie inserts or updates a movie record (MediaStoreWriter).
-func (s *DBStore) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title string, year int, fullPath string, size int64) error {
+func (s *DBStore) UpsertARRMovie(ctx context.Context, tmdbID int64, imdbID, title, rawTitle string, year int, fullPath string, size int64) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO arr_media (media_type, tmdb_id, imdb_id, series_id, season_number, episode_number, title, year, path, size)
-		 VALUES ('movie', $1, $2, 0, 0, 0, $3, $4, $5, $6)
+		`INSERT INTO arr_media (media_type, tmdb_id, imdb_id, raw_title, series_id, season_number, episode_number, title, year, path, size)
+		 VALUES ('movie', $1, $2, $3, 0, 0, 0, $4, $5, $6, $7)
 		 ON CONFLICT(path) DO UPDATE SET
-			 tmdb_id=EXCLUDED.tmdb_id, imdb_id=EXCLUDED.imdb_id, series_id=0,
-			 season_number=0, episode_number=0, title=EXCLUDED.title,
-			 year=EXCLUDED.year, size=EXCLUDED.size, updated_at=datetime('now')`,
-		tmdbID, imdbID, title, year, fullPath, size)
+		 tmdb_id=EXCLUDED.tmdb_id, imdb_id=EXCLUDED.imdb_id, raw_title=EXCLUDED.raw_title, series_id=0,
+		 season_number=0, episode_number=0, title=EXCLUDED.title,
+		 year=EXCLUDED.year, size=EXCLUDED.size, updated_at=datetime('now')`,
+		tmdbID, imdbID, rawTitle, title, year, fullPath, size)
 	return err
 }
 
@@ -348,30 +347,60 @@ var defaultQuality = QualityModel{
 
 // parseQualityFromFilename infers resolution and source from a media filename
 // so Bazarr indexes the exact release quality.
-func parseQualityFromFilename(filename string) QualityModel {
-	lower := strings.ToLower(filename)
+// When rawTitle is not empty it is used for both source and resolution detection;
+// fileName is used as fallback and for resolution detection in legacy dummies.
+func parseQualityFromFilename(rawTitle, fileName string) QualityModel {
+	// Pick the best text to scan for source tags.
+	text := rawTitle
+	if text == "" {
+		text = fileName
+	}
 
+	lower := strings.ToLower(text)
+
+	// Resolution: prefer rawTitle, fall back to fileName
 	res := 1080
 	resStr := "1080p"
-	if strings.Contains(lower, "2160p") || strings.Contains(lower, "4k") {
+	resText := rawTitle
+	if resText == "" {
+		resText = fileName
+	}
+	resLower := strings.ToLower(resText)
+	if strings.Contains(resLower, "2160p") || strings.Contains(resLower, "4k") {
 		res = 2160
 		resStr = "2160p"
-	} else if strings.Contains(lower, "720p") {
+	} else if strings.Contains(resLower, "720p") {
 		res = 720
 		resStr = "720p"
-	} else if strings.Contains(lower, "480p") {
+	} else if strings.Contains(resLower, "480p") {
 		res = 480
 		resStr = "480p"
 	}
 
+	// Source detection — full prioritized list
 	source := "webdl"
 	sourceName := "WEBDL"
-	if strings.Contains(lower, "bluray") || strings.Contains(lower, "remux") {
+	if strings.Contains(lower, "remux") {
+		source = "bluray"
+		sourceName = "Remux"
+	} else if strings.Contains(lower, "bluray") || strings.Contains(lower, "bdrip") || strings.Contains(lower, "brrip") {
 		source = "bluray"
 		sourceName = "Bluray"
+	} else if strings.Contains(lower, "web-dl") || strings.Contains(lower, "webdl") {
+		source = "webdl"
+		sourceName = "WEBDL"
+	} else if strings.Contains(lower, "webrip") || strings.Contains(lower, "web-rip") {
+		source = "webrip"
+		sourceName = "WEBRip"
 	} else if strings.Contains(lower, "hdtv") {
 		source = "hdtv"
 		sourceName = "HDTV"
+	} else {
+		// Legacy heuristic for dummies without raw_title
+		if strings.Contains(lower, "truehd") || strings.Contains(lower, "dts-hd") || (res == 2160) {
+			source = "bluray"
+			sourceName = "Bluray"
+		}
 	}
 
 	return QualityModel{
@@ -515,6 +544,10 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 		if m.MovieFile == nil && m.Path != "" {
 			fullPath := m.Path
 			basename := filepath.Base(fullPath)
+			m.RawTitle = m.Title // fallback: use title as rawTitle if not set
+			if m.RawTitle == "" {
+				m.RawTitle = basename
+			}
 			m.MovieFile = &RadarrMovieFile{
 				ID:           m.ID,
 				MovieID:      m.ID,
@@ -522,7 +555,7 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 				Path:         fullPath,
 				Size:         m.Size,
 				DateAdded:    time.Now().UTC().Format(time.RFC3339),
-				Quality:      parseQualityFromFilename(basename),
+				Quality:      parseQualityFromFilename(m.RawTitle, basename),
 			}
 			// Directory path goes into m.Path.
 			m.Path = filepath.Dir(fullPath)
@@ -564,6 +597,10 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 	if movie.MovieFile == nil && movie.Path != "" {
 		fullPath := movie.Path
 		basename := filepath.Base(fullPath)
+		movie.RawTitle = movie.Title // fallback
+		if movie.RawTitle == "" {
+			movie.RawTitle = basename
+		}
 		movie.MovieFile = &RadarrMovieFile{
 			ID:           movie.ID,
 			MovieID:      movie.ID,
@@ -571,7 +608,7 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 			Path:         fullPath,
 			Size:         movie.Size,
 			DateAdded:    time.Now().UTC().Format(time.RFC3339),
-			Quality:      parseQualityFromFilename(basename),
+			Quality:      parseQualityFromFilename(movie.RawTitle, basename),
 		}
 		movie.Path = filepath.Dir(fullPath)
 	}
@@ -658,7 +695,7 @@ func (h *Handler) handleEpisodesBySeries(w http.ResponseWriter, r *http.Request)
 				Path:         fullPath,
 				Size:         e.Size,
 				DateAdded:    time.Now().UTC().Format(time.RFC3339),
-				Quality:      parseQualityFromFilename(basename),
+				Quality:      parseQualityFromFilename("", basename),
 			}
 		}
 	}
@@ -690,7 +727,7 @@ func (h *Handler) handleEpisodeFilesBySeries(w http.ResponseWriter, r *http.Requ
 			f.RelativePath = filepath.Base(f.Path)
 		}
 		if f.Quality.Quality.Name == "" {
-			f.Quality = parseQualityFromFilename(f.RelativePath)
+			f.Quality = parseQualityFromFilename("", f.RelativePath)
 		}
 	}
 	jsonResponse(w, http.StatusOK, files)

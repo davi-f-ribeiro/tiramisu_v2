@@ -567,7 +567,9 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 				_, _ = fmt.Sscanf(movie.ReleaseDate[:4], "%d", &year)
 			}
 			if e.metadb != nil {
-				if err := e.metadb.UpsertARRMovie(ctx, int64(movie.ID), imdbID, title, year, mkvPath, bestFile.Length); err != nil {
+				// rawTitle = original release name (filename without extension)
+				rawTitle := filename
+				if err := e.metadb.UpsertARRMovie(ctx, int64(movie.ID), imdbID, title, rawTitle, year, mkvPath, bestFile.Length); err != nil {
 					e.logger.Printf("[ARR] Erro ao registrar filme %s no catálogo ARR: %v", title, err)
 				}
 			}
