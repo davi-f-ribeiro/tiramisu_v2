@@ -20,6 +20,7 @@ require (
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.3.0
 	github.com/jackpal/go-nat-pmp v1.0.2
+	github.com/mattn/go-sqlite3 v1.14.16
 	github.com/pkg/errors v0.9.1
 	github.com/wlynxg/anet v0.0.5
 	go.etcd.io/bbolt v1.4.3

@@ -22,6 +22,7 @@ import (
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
 	"tiramisu/internal/config"
+	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -42,6 +43,7 @@ type MovieGoEngine struct {
 	stateDir  string
 	limiter   *rate.Limiter
 	logger    *log.Logger
+	metadb    *metadb.DB // V1.7.1: Optional SQLite backend for ARR catalog
 
 	// Negative caches
 	noMKVCache     map[string]CacheEntry
@@ -103,6 +105,7 @@ type MovieEngineConfig struct {
 	ProwlarrCfg     prowlarr.ConfigProwlarr
 	Language        config.LanguageConfig
 	Weights         config.MovieWeights
+	MetaDB          *metadb.DB // Optional SQLite backend for ARR catalog
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -168,6 +171,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		sourcePath:    filepath.Clean(filepath.Join(cfg.MoviesDir, "..")),
 		fuseMountPath: cfg.FuseMountPath,
 		stateDir:  cfg.StateDir,
+		metadb:    cfg.MetaDB,
 		limiter:   rate.NewLimiter(rate.Every(250*time.Millisecond), 1),
 		logger:    logger,
 
@@ -247,6 +251,11 @@ func (e *MovieGoEngine) removeStub(ctx context.Context, path, hash string) {
 
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
+	}
+
+	// Clean ARR catalog entry
+	if e.metadb != nil {
+		_ = e.metadb.DeleteARRMediaByPath(ctx, path)
 	}
 }
 
@@ -552,6 +561,16 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		streamURL := fmt.Sprintf("%s/stream?link=%s&index=%d&play", e.gostorm.baseURL, hash, bestFile.ID)
 
 		if e.createMKV(mkvPath, streamURL, bestFile.Length, magnet, imdbID) {
+			// Register movie in ARR catalog
+			year := 0
+			if len(movie.ReleaseDate) >= 4 {
+				_, _ = fmt.Sscanf(movie.ReleaseDate[:4], "%d", &year)
+			}
+			if e.metadb != nil {
+				if err := e.metadb.UpsertARRMovie(ctx, int64(movie.ID), imdbID, title, year, mkvPath, bestFile.Length); err != nil {
+					e.logger.Printf("[ARR] Erro ao registrar filme %s no catálogo ARR: %v", title, err)
+				}
+			}
 			res := "4K"
 			if !c.Is4K {
 				res = "1080p"

@@ -45,12 +45,15 @@ type TVGoEngine struct {
 	registry     map[string]TVEpisodeEntry
 	registryFile string
 	db           *metadb.DB // V1.7.1: Optional SQLite backend
+	metadb       *metadb.DB // ARR catalog backend
 
 	processedThisRun map[string]bool
 	stats            TVSyncStats
 
 	blacklist     BlacklistData
 	blacklistFile string
+
+	arrSeriesID   int64 // ARR series catalog ID (set in processShow, used by processFullpack/processSingle)
 
 	invalidatePath func(string)
 
@@ -621,7 +624,7 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 	}
 
 	t0 := time.Now()
-	imdbID, _, err := e.tmdb.TVExternalIDs(ctx, show.ID)
+	imdbID, tvdbID, err := e.tmdb.TVExternalIDs(ctx, show.ID)
 	if err != nil {
 		return
 	}
@@ -680,6 +683,18 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 	e.logger.Printf("  getStreams: %v (%d streams)", time.Since(t1).Round(time.Millisecond), len(streams))
 	if len(streams) == 0 {
 		return
+	}
+
+	// Register show in ARR catalog
+	if e.db != nil {
+		showDirName := e.getShowFolderName(showName, details.FirstAirDate)
+		showDir := filepath.Join(e.tvDir, showDirName)
+		id, err := e.db.UpsertARRSeries(ctx, int64(show.ID), int64(tvdbID), imdbID, show.Name, showDir)
+		if err != nil {
+			e.logger.Printf("[ARR] Erro ao registrar série %s no ARR: %v", show.Name, err)
+		} else {
+			e.arrSeriesID = id
+		}
 	}
 
 	sort.SliceStable(streams, func(i, j int) bool {
@@ -1177,6 +1192,13 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 				e.removeStub(ctx, existing.FilePath, existing.Hash)
 				e.stats.Upgrades++
 			}
+			// Register episode in ARR catalog
+			if e.db != nil && e.arrSeriesID > 0 {
+				epTitle := fmt.Sprintf("Episode %d", episode)
+				if err := e.db.UpsertARREpisode(ctx, e.arrSeriesID, season, episode, epTitle, epPath, vf.Length); err != nil {
+					e.logger.Printf("[ARR] Erro ao registrar ep S%02dE%02d de %s no ARR: %v", season, episode, showName, err)
+				}
+			}
 			e.registerEpisode(key, stream.QualityScore, hash, epPath, "fullpack")
 			e.processedThisRun[key] = true
 			created++
@@ -1260,6 +1282,13 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream 
 		if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
 			e.removeStub(ctx, existing.FilePath, existing.Hash)
 			e.stats.Upgrades++
+		}
+		// Register episode in ARR catalog
+		if e.db != nil && e.arrSeriesID > 0 {
+			epTitle := fmt.Sprintf("Episode %d", episode)
+			if err := e.db.UpsertARREpisode(ctx, e.arrSeriesID, season, episode, epTitle, epPath, bestFile.Length); err != nil {
+				e.logger.Printf("[ARR] Erro ao registrar ep S%02dE%02d de %s no ARR: %v", season, episode, showName, err)
+			}
 		}
 		e.registerEpisode(key, stream.QualityScore, hash, epPath, "single")
 		e.processedThisRun[key] = true
