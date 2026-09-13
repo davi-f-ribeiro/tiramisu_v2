@@ -556,9 +556,16 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return child, 0
 	}
 
-	node := &fs.LoopbackNode{RootData: &fs.LoopbackRoot{Path: r.sourcePath}}
-	stable := fs.StableAttr{Mode: uint32(st.Mode & syscall.S_IFMT)}
+	// Physical file passthrough (non-mkv files at root level)
+	node := &PhysicalFileNode{path: fullPath}
+	stable := fs.StableAttr{
+		Mode: uint32(st.Mode & syscall.S_IFMT),
+		Ino:  st.Ino,
+		Gen:  1,
+	}
 	child := r.NewInode(ctx, node, stable)
+	fillAttrFromStat(&st, &out.Attr)
+	out.Ino = st.Ino
 	return child, 0
 }
 
@@ -715,6 +722,18 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 					Off:  uint64(i + 1),
 				})
 			}
+		} else {
+			// All other physical files (nfo, sub, idx, txt, etc.) must be visible
+			st := syscall.Stat_t{}
+			if err := syscall.Stat(fullPath, &st); err == nil && (st.Mode&syscall.S_IFMT) == syscall.S_IFREG {
+				ino := getFileInodeFromMap(fullPath)
+				result = append(result, fuse.DirEntry{
+					Name: e.Name(),
+					Mode: syscall.S_IFREG,
+					Ino:  ino,
+					Off:  uint64(i + 1),
+				})
+			}
 		}
 	}
 
@@ -749,7 +768,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		st := syscall.Stat_t{}
 		if err := syscall.Stat(fullPath, &st); err == nil && (st.Mode&syscall.S_IFMT) == syscall.S_IFREG {
 			ino := getFileInodeFromMap(fullPath)
-			node := &fs.LoopbackNode{RootData: &fs.LoopbackRoot{Path: fullPath}}
+			node := &PhysicalFileNode{path: fullPath}
 			stable := fs.StableAttr{
 				Mode: uint32(st.Mode & syscall.S_IFMT),
 				Ino:  ino,
@@ -784,7 +803,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	// Passthrough para outros arquivos físicos (regulares não-mkv não-virtuais)
-	node := &fs.LoopbackNode{RootData: &fs.LoopbackRoot{Path: fullPath}}
+	node := &PhysicalFileNode{path: fullPath}
 	stable := fs.StableAttr{
 		Mode: uint32(st.Mode & syscall.S_IFMT),
 		Ino:  st.Ino,
@@ -904,6 +923,53 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 
 	logger.Printf("UNLINK COMPLETE: file deleted successfully")
 	return 0
+}
+
+// PhysicalFileNode - serve un file fisico esistente sul disco (sottotitoli, nfo, ecc.)
+type PhysicalFileNode struct {
+	fs.Inode
+	path string
+}
+
+// Compile-time interface checks for PhysicalFileNode
+var _ fs.NodeGetattrer = (*PhysicalFileNode)(nil)
+var _ fs.NodeOpener = (*PhysicalFileNode)(nil)
+
+func (n *PhysicalFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	st := syscall.Stat_t{}
+	if err := syscall.Lstat(n.path, &st); err != nil {
+		logger.Printf("PHYSICAL FILE GETATTR ERROR: %v", err)
+		return vfs.ToErrno(err)
+	}
+	fillAttrFromStat(&st, &out.Attr)
+	out.Ino = st.Ino
+	out.Mode = 0666
+	return 0
+}
+
+type physicalFileHandle struct {
+	file *os.File
+}
+
+func (h *physicalFileHandle) Read(dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	n, err := h.file.ReadAt(dest, off)
+	if err != nil {
+		return nil, vfs.ToErrno(err)
+	}
+	return fuse.ReadResultData(dest[:n]), 0
+}
+
+func (h *physicalFileHandle) Release() {
+	h.file.Close()
+}
+
+func (n *PhysicalFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	file, err := os.Open(n.path)
+	if err != nil {
+		logger.Printf("PHYSICAL FILE OPEN ERROR: %v", err)
+		return nil, 0, vfs.ToErrno(err)
+	}
+	return &physicalFileHandle{file: file}, 0, 0
 }
 
 // VirtualMkvNode - nodo per singolo file .mkv virtuale
