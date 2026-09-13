@@ -748,6 +748,10 @@ func TestMovieListWithMovieFile(t *testing.T) {
 		if !m.HasFile || !m.Monitored {
 			t.Errorf("movie %q: hasFile=%v, monitored=%v, want true,true", m.Title, m.HasFile, m.Monitored)
 		}
+		// Quality must be populated so Bazarr doesn't hit KeyError('quality').
+		if m.MovieFile.Quality.Quality.Name == "" {
+			t.Errorf("movie %q: movieFile.quality.quality.name is empty", m.Title)
+		}
 	}
 }
 
@@ -788,6 +792,11 @@ func TestMovieDetailWithMovieFile(t *testing.T) {
 	}
 	if movie.MovieFile.ID != 42 {
 		t.Errorf("movieFile.id = %d, want 42", movie.MovieFile.ID)
+	}
+	if movie.MovieFile.Quality.Quality.Name == "" {
+		t.Error("movieFile.quality.quality.name is empty")
+	} else if movie.MovieFile.Quality.Quality.Name != "WEBDL-1080p" {
+		t.Errorf("movieFile.quality.quality.name = %q, want WEBDL-1080p", movie.MovieFile.Quality.Quality.Name)
 	}
 	if !movie.HasFile || !movie.Monitored {
 		t.Errorf("hasFile=%v, monitored=%v, want true,true", movie.HasFile, movie.Monitored)

@@ -330,6 +330,22 @@ func jsonResponse(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// defaultQuality is the baseline quality value sent in MovieFile and EpisodeFile
+// so Bazarr's parser never hits KeyError('quality').
+var defaultQuality = QualityModel{
+	Quality: QualityDetail{
+		ID:         7,
+		Name:       "WEBDL-1080p",
+		Source:     "webdl",
+		Resolution: 1080,
+	},
+	Revision: RevisionDetail{
+		Version:  1,
+		Real:     0,
+		IsRepack: false,
+	},
+}
+
 func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -440,15 +456,17 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 		m.IsAvailable = true
 		m.Monitored = true
 		if m.MovieFile == nil && m.Path != "" {
+			fullPath := m.Path
 			m.MovieFile = &RadarrMovieFile{
 				ID:           m.ID,
 				MovieID:      m.ID,
-				RelativePath: filepath.Base(m.Path),
-				Path:         m.Path,
+				RelativePath: filepath.Base(fullPath),
+				Path:         fullPath,
 				Size:         m.Size,
+				Quality:      defaultQuality,
 			}
 			// Directory path goes into m.Path.
-			m.Path = filepath.Dir(m.Path)
+			m.Path = filepath.Dir(fullPath)
 		}
 	}
 	jsonResponse(w, http.StatusOK, movies)
@@ -478,14 +496,16 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 	movie.IsAvailable = true
 	movie.Monitored = true
 	if movie.MovieFile == nil && movie.Path != "" {
+		fullPath := movie.Path
 		movie.MovieFile = &RadarrMovieFile{
 			ID:           movie.ID,
 			MovieID:      movie.ID,
-			RelativePath: filepath.Base(movie.Path),
-			Path:         movie.Path,
+			RelativePath: filepath.Base(fullPath),
+			Path:         fullPath,
 			Size:         movie.Size,
+			Quality:      defaultQuality,
 		}
-		movie.Path = filepath.Dir(movie.Path)
+		movie.Path = filepath.Dir(fullPath)
 	}
 	jsonResponse(w, http.StatusOK, movie)
 }
@@ -553,13 +573,15 @@ func (h *Handler) handleEpisodesBySeries(w http.ResponseWriter, r *http.Request)
 		e.Monitored = true
 		e.EpisodeFileID = e.ID
 		if e.EpisodeFile == nil && e.Path != "" {
+			fullPath := e.Path
 			e.EpisodeFile = &SonarrEpisodeFile{
 				ID:           e.ID,
 				SeriesID:     e.SeriesID,
 				SeasonNumber: e.SeasonNumber,
-				RelativePath: filepath.Base(e.Path),
-				Path:         e.Path,
+				RelativePath: filepath.Base(fullPath),
+				Path:         fullPath,
 				Size:         e.Size,
+				Quality:      defaultQuality,
 			}
 		}
 	}
