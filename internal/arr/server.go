@@ -483,6 +483,9 @@ func (h *Handler) handleTag(w http.ResponseWriter, r *http.Request) {
 
 // populateMovieFields enriches a RadarrMovie with computed title fields,
 // availability flags, and an optional MovieFile subobject for Bazarr.
+// Uniqueness guard: when tmdbId is absent (≤ 0) we fall back to the
+// internal arr_media.id so Bazarr never sees duplicate zero values that
+// trigger UNIQUE constraint failures.
 func (h *Handler) populateMovieFields(m *RadarrMovie) {
 	if m == nil {
 		return
@@ -490,6 +493,12 @@ func (h *Handler) populateMovieFields(m *RadarrMovie) {
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
+
+	// Uniqueness fallback for Bazarr: tmdbId=0 would collide across
+	// multiple stubs. When absent, use the unique internal ID instead.
+	if m.TmdbID <= 0 {
+		m.TmdbID = m.ID
+	}
 
 	// Compute title fields Bazarr requires.
 	cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
@@ -572,6 +581,13 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	if series == nil {
 		series = []*SonarrSeries{}
 	}
+	// Uniqueness fallback for Bazarr: tvdbId=0 would collide across
+	// multiple stubs. When absent, use the unique internal ID instead.
+	for _, s := range series {
+		if s.TvdbID <= 0 {
+			s.TvdbID = s.ID
+		}
+	}
 	jsonResponse(w, http.StatusOK, series)
 }
 
@@ -593,6 +609,10 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// Uniqueness fallback for Bazarr: tvdbId=0 uses unique internal ID.
+	if series.TvdbID <= 0 {
+		series.TvdbID = series.ID
 	}
 	jsonResponse(w, http.StatusOK, series)
 }
