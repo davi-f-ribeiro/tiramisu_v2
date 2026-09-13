@@ -122,32 +122,33 @@ func (c *Client) ExternalIDs(ctx context.Context, tmdbID int) (string, error) {
 	return result.IMDBID, nil
 }
 
-// TVExternalIDs returns the IMDB ID for a TMDB TV show.
-func (c *Client) TVExternalIDs(ctx context.Context, tmdbID int) (string, error) {
+// TVExternalIDs returns the IMDB ID and TVDB ID for a TMDB TV show.
+func (c *Client) TVExternalIDs(ctx context.Context, tmdbID int) (string, int, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	urlStr := fmt.Sprintf("%s/tv/%d/external_ids?api_key=%s", baseURL, tmdbID, c.apiKey)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	resp, err := catalog.Do(ctx, c.http, req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
 	var result struct {
 		IMDBID string `json:"imdb_id"`
+		TVDBID int    `json:"tvdb_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return "", 0, err
 	}
 
-	return result.IMDBID, nil
+	return result.IMDBID, result.TVDBID, nil
 }
 
 // MovieDetails returns full movie details including watch providers.

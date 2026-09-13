@@ -44,10 +44,17 @@ var (
 
 // MkvJSON is the internal JSON representation of a .mkv file.
 type MkvJSON struct {
-	URL    string `json:"url"`
-	Size   int64  `json:"size"`
-	Magnet string `json:"magnet"`
-	Imdb   string `json:"imdb"`
+	URL       string `json:"url"`
+	Size      int64  `json:"size"`
+	Magnet    string `json:"magnet"`
+	Imdb      string `json:"imdb,omitempty"`
+	TMDBID    int    `json:"tmdb_id,omitempty"`
+	TVDBID    int    `json:"tvdb_id,omitempty"`
+	MediaType string `json:"media_type,omitempty"` // "movie" ou "episode"
+	Title     string `json:"title,omitempty"`
+	Year      int    `json:"year,omitempty"`
+	Season    int    `json:"season,omitempty"`
+	Episode   int    `json:"episode,omitempty"`
 }
 
 // ReadMetadataFromFile reads metadata from a virtual .mkv file.

@@ -621,8 +621,8 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 	}
 
 	t0 := time.Now()
-	imdbID, err := e.tmdb.TVExternalIDs(ctx, show.ID)
-	if err != nil || imdbID == "" {
+	imdbID, _, err := e.tmdb.TVExternalIDs(ctx, show.ID)
+	if err != nil {
 		return
 	}
 

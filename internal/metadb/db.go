@@ -148,6 +148,24 @@ CREATE TABLE IF NOT EXISTS v304_bans (
     ip        TEXT PRIMARY KEY,
     banned_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS arr_media (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_type       TEXT NOT NULL,  -- 'movie', 'series', 'episode'
+    tmdb_id          INTEGER DEFAULT 0,
+    tvdb_id          INTEGER DEFAULT 0,
+    imdb_id          TEXT DEFAULT '',
+    series_id        INTEGER DEFAULT 0,
+    season_number    INTEGER DEFAULT 0,
+    episode_number   INTEGER DEFAULT 0,
+    title            TEXT NOT NULL,
+    year             INTEGER DEFAULT 0,
+    path             TEXT NOT NULL UNIQUE,
+    size             INTEGER DEFAULT 0,
+    updated_at       TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_arr_media_type ON arr_media(media_type);
+CREATE INDEX IF NOT EXISTS idx_arr_media_series ON arr_media(series_id);
 `
 	_, err := d.db.Exec(schema)
 	if err != nil {
