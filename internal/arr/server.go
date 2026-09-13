@@ -38,7 +38,7 @@ func NewDBStore(db *sql.DB) *DBStore {
 // GetMovies returns all movies from arr_media.
 func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at
+		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at, poster_path, backdrop_path
 		FROM arr_media WHERE media_type = 'movie' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get movies: %w", err)
@@ -50,7 +50,8 @@ func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 		var updatedAt string
 		var m RadarrMovie
 		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Path,
-			&m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt); err != nil {
+			&m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt,
+			&m.PosterPath, &m.BackdropPath); err != nil {
 			return nil, fmt.Errorf("arr: scan movie: %w", err)
 		}
 		m.HasFile = true
@@ -66,9 +67,10 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	var m RadarrMovie
 	var updatedAt string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at
+		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at, poster_path, backdrop_path
 		FROM arr_media WHERE id = $1 AND media_type = 'movie'`, id).
-		Scan(&m.ID, &m.Title, &m.Year, &m.Path, &m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt)
+		Scan(&m.ID, &m.Title, &m.Year, &m.Path, &m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt,
+			&m.PosterPath, &m.BackdropPath)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +128,7 @@ func (s *DBStore) DeleteARRMediaByPath(ctx context.Context, fullPath string) err
 // GetSeries returns all series from arr_media.
 func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, tvdb_id, imdb_id, path
+		SELECT id, title, tvdb_id, imdb_id, path, poster_path, backdrop_path
 		FROM arr_media WHERE media_type = 'series' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get series: %w", err)
@@ -136,7 +138,8 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 	var series []*SonarrSeries
 	for rows.Next() {
 		var s SonarrSeries
-		if err := rows.Scan(&s.ID, &s.Title, &s.TvdbID, &s.ImdbID, &s.Path); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.TvdbID, &s.ImdbID, &s.Path,
+			&s.PosterPath, &s.BackdropPath); err != nil {
 			return nil, fmt.Errorf("arr: scan series: %w", err)
 		}
 		s.Monitored = true
@@ -149,9 +152,10 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 func (s *DBStore) GetSeriesByID(ctx context.Context, id int64) (*SonarrSeries, error) {
 	var series SonarrSeries
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, tvdb_id, imdb_id, path
+		SELECT id, title, tvdb_id, imdb_id, path, poster_path, backdrop_path
 		FROM arr_media WHERE id = $1 AND media_type = 'series'`, id).
-		Scan(&series.ID, &series.Title, &series.TvdbID, &series.ImdbID, &series.Path)
+		Scan(&series.ID, &series.Title, &series.TvdbID, &series.ImdbID, &series.Path,
+			&series.PosterPath, &series.BackdropPath)
 	if err != nil {
 		return nil, err
 	}
@@ -563,11 +567,9 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 }
 
 // mountTMDBImages builds the images array from TMDb poster/backdrop paths.
+// Always initializes v.Images to ensure the JSON field is an empty array []
+// rather than null when no images are available.
 func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
-	if posterPath == "" && backdropPath == "" {
-		return
-	}
-
 	switch v := m.(type) {
 	case *RadarrMovie:
 		images := make([]MediaImage, 0, 2)
