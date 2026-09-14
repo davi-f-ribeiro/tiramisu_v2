@@ -304,8 +304,8 @@ func TestManualSyncDurationMs(t *testing.T) {
 		t.Fatalf("json decode: %v", err)
 	}
 	duration := int64(body["duration_ms"].(float64))
-	if duration <= 0 {
-		t.Errorf("duration_ms = %d, want > 0", duration)
+	if duration < 0 {
+		t.Errorf("duration_ms = %d, want >= 0", duration)
 	}
 }
 

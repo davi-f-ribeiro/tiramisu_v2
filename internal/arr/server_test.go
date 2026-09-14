@@ -1044,8 +1044,10 @@ func TestMovieDetailSortTitle(t *testing.T) {
 // 12. Fallback de IDs externos para evitar UNIQUE constraint no Bazarr
 // ---------------------------------------------------------------------------
 
-func TestMovieTmdbIdFallbackDistinct(t *testing.T) {
+func TestMovieTmdbIdLeftZeroWhenAbsent(t *testing.T) {
 	// Cria dois filmes SEM TmdbID explícito (zero).
+	// Após a correção de unicidade B1, tmdbId=0 é substituído pelo
+	// arr_media.id interno para evitar UNIQUE constraint failures no Bazarr.
 	store := newMockStore()
 	store.movies[10] = &RadarrMovie{ID: 10, Title: "Movie NoTMDB", Year: 2020, Path: "/data/movies/movie-no-tmdb.mkv", TmdbID: 0}
 	store.movies[11] = &RadarrMovie{ID: 11, Title: "Movie AlsoNoTMDB", Year: 2021, Path: "/data/movies/movie-also-no-tmdb.mkv", TmdbID: 0}
@@ -1070,22 +1072,22 @@ func TestMovieTmdbIdFallbackDistinct(t *testing.T) {
 		t.Fatalf("got %d movies, want 2", len(movies))
 	}
 
-	tmdbMap := make(map[int64]bool)
+	// Após a correção de unicidade, cada filme deve ter tmdbId único (>0),
+	// fallback para o arr_media.id quando o externo estava ausente.
 	for _, m := range movies {
 		if m.TmdbID <= 0 {
-			t.Errorf("movie %q: tmdbId = %d, deve ser > 0 (fallback para ID interno)", m.Title, m.TmdbID)
+			t.Errorf("movie %q: tmdbId = %d, esperado ID interno=%d (fallback de unicidade)", m.Title, m.TmdbID, m.ID)
 		}
-		if tmdbMap[m.TmdbID] {
-			t.Errorf("duplicação: tmdbId = %d compartilhado entre filmes — causará UNIQUE constraint no Bazarr", m.TmdbID)
+		if m.TmdbID != m.ID {
+			t.Errorf("movie %q: tmdbId = %d, esperado %d (fallback para ID interno)", m.Title, m.TmdbID, m.ID)
 		}
-		tmdbMap[m.TmdbID] = true
-	}
-	if len(tmdbMap) != 2 {
-		t.Errorf("tmdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tmdbMap))
 	}
 }
 
-func TestSeriesTvdbIdFallbackDistinct(t *testing.T) {
+func TestSeriesTvdbIdLeftZeroWhenAbsent(t *testing.T) {
+	// Cria duas séries SEM TvdbID explícito (zero).
+	// Após a correção de unicidade, tvdbId=0 é substituído pelo
+	// arr_media.id interno para evitar UNIQUE constraint failures no Bazarr.
 	store := newMockStore()
 	store.series[30] = &SonarrSeries{ID: 30, Title: "Show NoTvdb", TvdbID: 0, Path: "/data/shows/no-tvdb"}
 	store.series[31] = &SonarrSeries{ID: 31, Title: "Show AlsoNoTvdb", TvdbID: 0, Path: "/data/shows/also-no-tvdb"}
@@ -1110,18 +1112,15 @@ func TestSeriesTvdbIdFallbackDistinct(t *testing.T) {
 		t.Fatalf("got %d series, want 2", len(series))
 	}
 
-	tvdbMap := make(map[int64]bool)
+	// Após a correção de unicidade, cada série deve ter tvdbId único (>0),
+	// fallback para o arr_media.id quando o externo estava ausente.
 	for _, s := range series {
 		if s.TvdbID <= 0 {
-			t.Errorf("series %q: tvdbId = %d, deve ser > 0 (fallback para ID interno)", s.Title, s.TvdbID)
+			t.Errorf("series %q: tvdbId = %d, esperado ID interno=%d (fallback de unicidade)", s.Title, s.TvdbID, s.ID)
 		}
-		if tvdbMap[s.TvdbID] {
-			t.Errorf("duplicação: tvdbId = %d compartilhado entre séries", s.TvdbID)
+		if s.TvdbID != s.ID {
+			t.Errorf("series %q: tvdbId = %d, esperado %d (fallback para ID interno)", s.Title, s.TvdbID, s.ID)
 		}
-		tvdbMap[s.TvdbID] = true
-	}
-	if len(tvdbMap) != 2 {
-		t.Errorf("tvdbMap tem %d entradas, esperado 2 (IDs distintos)", len(tvdbMap))
 	}
 }
 
@@ -1159,5 +1158,324 @@ func TestParseQualityFromFilename_RawTitle_Bdrip(t *testing.T) {
 	}
 	if q.Quality.Name != "Bluray-720p" {
 		t.Errorf("quality.name = %q, want Bluray-720p", q.Quality.Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 13. Uniqueness fallback: tmdbId / tvdbId when external IDs are zero
+// ---------------------------------------------------------------------------
+
+func TestMovieList_TmdbIdFallbackZero(t *testing.T) {
+	// Multiple movies with TmdbID:0 would all serialise tmdbId=0,
+	// causing UNIQUE constraint failures in Bazarr.  After the
+	// fallback, each gets its unique arr_media.id instead.
+	store := newMockStore()
+	store.movies[1] = &RadarrMovie{ID: 1, Title: "Movie A", Year: 2020, Path: "/data/movies/m1", TmdbID: 0}
+	store.movies[2] = &RadarrMovie{ID: 2, Title: "Movie B", Year: 2021, Path: "/data/movies/m2", TmdbID: 0}
+	store.movies[3] = &RadarrMovie{ID: 3, Title: "Movie C", Year: 2022, Path: "/data/movies/m3", TmdbID: 0}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movies []*RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movies); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(movies) != 3 {
+		t.Fatalf("got %d movies, want 3", len(movies))
+	}
+
+	// Verify JSON key is "tmdbId" (camelCase for Bazarr)
+	bodyStr := w.Body.String()
+	if !strings.Contains(bodyStr, `"tmdbId"`) {
+		t.Errorf("JSON body missing key \"tmdbId\" — Bazarr expects camelCase")
+	}
+
+	// Every tmdbId must be > 0 and unique.
+	seen := make(map[int64]bool, len(movies))
+	for _, m := range movies {
+		if m.TmdbID <= 0 {
+			t.Errorf("movie %q: tmdbId = %d, want > 0", m.Title, m.TmdbID)
+		}
+		if seen[m.TmdbID] {
+			t.Errorf("duplicate tmdbId = %d for movie %q", m.TmdbID, m.Title)
+		}
+		seen[m.TmdbID] = true
+		// The fallback must use the internal ID when TmdbID was zero.
+		if m.TmdbID != m.ID {
+			t.Errorf("movie %q: expected tmdbId fallback to ID=%d, got %d", m.Title, m.ID, m.TmdbID)
+		}
+	}
+}
+
+func TestMovieList_TmdbIdPreservesNonZero(t *testing.T) {
+	// When TmdbID is already set (>0) it must NOT be replaced.
+	store := newMockStore()
+	store.movies[1] = &RadarrMovie{ID: 1, Title: "HasTMDB", Year: 2020, Path: "/data/movies/m1", TmdbID: 999}
+	store.movies[2] = &RadarrMovie{ID: 2, Title: "NoTMDB", Year: 2021, Path: "/data/movies/m2", TmdbID: 0}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movies []*RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movies); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+
+	for _, m := range movies {
+		if m.Title == "HasTMDB" {
+			if m.TmdbID != 999 {
+				t.Errorf("movie %q: tmdbId = %d, want 999 (preserved)", m.Title, m.TmdbID)
+			}
+		}
+		if m.Title == "NoTMDB" {
+			if m.TmdbID != m.ID {
+				t.Errorf("movie %q: tmdbId = %d, want %d (fallback to ID)", m.Title, m.TmdbID, m.ID)
+			}
+		}
+	}
+}
+
+func TestMovieDetail_TmdbIdFallbackZero(t *testing.T) {
+	store := newMockStore()
+	store.movies[42] = &RadarrMovie{
+		ID: 42, Title: "Detail NoTMDB", Year: 2019, Path: "/data/movies/d1",
+		TmdbID: 0,
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie/42", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movie RadarrMovie
+	if err := json.Unmarshal(w.Body.Bytes(), &movie); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if movie.TmdbID <= 0 {
+		t.Errorf("tmdbId = %d, want > 0 (fallback to ID=%d)", movie.TmdbID, movie.ID)
+	}
+	if movie.TmdbID != movie.ID {
+		t.Errorf("tmdbId = %d, want %d (fallback)", movie.TmdbID, movie.ID)
+	}
+}
+
+func TestSeriesList_TvdbIdFallbackZero(t *testing.T) {
+	// Multiple series with TvdbID:0 would all serialise tvdbId=0,
+	// causing UNIQUE constraint failures in Bazarr.
+	store := newMockStore()
+	store.series[1] = &SonarrSeries{ID: 1, Title: "Show A", TvdbID: 0, Path: "/data/shows/s1"}
+	store.series[2] = &SonarrSeries{ID: 2, Title: "Show B", TvdbID: 0, Path: "/data/shows/s2"}
+	store.series[3] = &SonarrSeries{ID: 3, Title: "Show C", TvdbID: 0, Path: "/data/shows/s3"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var series []*SonarrSeries
+	if err := json.Unmarshal(w.Body.Bytes(), &series); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if len(series) != 3 {
+		t.Fatalf("got %d series, want 3", len(series))
+	}
+
+	// Verify JSON key is "tvdbId" (camelCase for Bazarr)
+	bodyStr := w.Body.String()
+	if !strings.Contains(bodyStr, `"tvdbId"`) {
+		t.Errorf("JSON body missing key \"tvdbId\" — Bazarr expects camelCase")
+	}
+
+	// Every tvdbId must be > 0 and unique.
+	seen := make(map[int64]bool, len(series))
+	for _, s := range series {
+		if s.TvdbID <= 0 {
+			t.Errorf("series %q: tvdbId = %d, want > 0", s.Title, s.TvdbID)
+		}
+		if seen[s.TvdbID] {
+			t.Errorf("duplicate tvdbId = %d for series %q", s.TvdbID, s.Title)
+		}
+		seen[s.TvdbID] = true
+		if s.TvdbID != s.ID {
+			t.Errorf("series %q: expected tvdbId fallback to ID=%d, got %d", s.Title, s.ID, s.TvdbID)
+		}
+	}
+}
+
+func TestSeriesList_TvdbIdPreservesNonZero(t *testing.T) {
+	store := newMockStore()
+	store.series[1] = &SonarrSeries{ID: 1, Title: "HasTvdb", TvdbID: 888, Path: "/data/shows/s1"}
+	store.series[2] = &SonarrSeries{ID: 2, Title: "NoTvdb", TvdbID: 0, Path: "/data/shows/s2"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var series []*SonarrSeries
+	if err := json.Unmarshal(w.Body.Bytes(), &series); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+
+	for _, s := range series {
+		if s.Title == "HasTvdb" {
+			if s.TvdbID != 888 {
+				t.Errorf("series %q: tvdbId = %d, want 888 (preserved)", s.Title, s.TvdbID)
+			}
+		}
+		if s.Title == "NoTvdb" {
+			if s.TvdbID != s.ID {
+				t.Errorf("series %q: tvdbId = %d, want %d (fallback to ID)", s.Title, s.TvdbID, s.ID)
+			}
+		}
+	}
+}
+
+func TestSeriesDetail_TvdbIdFallbackZero(t *testing.T) {
+	store := newMockStore()
+	store.series[99] = &SonarrSeries{
+		ID: 99, Title: "Detail NoTvdb", TvdbID: 0, Path: "/data/shows/d1",
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series/99", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var s SonarrSeries
+	if err := json.Unmarshal(w.Body.Bytes(), &s); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+	if s.TvdbID <= 0 {
+		t.Errorf("tvdbId = %d, want > 0 (fallback to ID=%d)", s.TvdbID, s.ID)
+	}
+	if s.TvdbID != s.ID {
+		t.Errorf("tvdbId = %d, want %d (fallback)", s.TvdbID, s.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 14. mountTMDBImages unit tests
+// ---------------------------------------------------------------------------
+
+func TestMountTMDBImages_MovieOnlyPoster(t *testing.T) {
+	m := &RadarrMovie{ID: 1, Title: "Movie", PosterPath: "/abc123.jpg"}
+	mountTMDBImages(m, m.PosterPath, m.BackdropPath)
+	if len(m.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(m.Images))
+	}
+	if m.Images[0].CoverType != "poster" {
+		t.Errorf("coverType = %q, want poster", m.Images[0].CoverType)
+	}
+	wantURL := "https://image.tmdb.org/t/p/w500/abc123.jpg"
+	if m.Images[0].URL != wantURL {
+		t.Errorf("url = %q, want %q", m.Images[0].URL, wantURL)
+	}
+}
+
+func TestMountTMDBImages_MoviePosterAndBackdrop(t *testing.T) {
+	m := &RadarrMovie{ID: 2, Title: "Movie2", PosterPath: "/poster.jpg", BackdropPath: "/back.jpg"}
+	mountTMDBImages(m, m.PosterPath, m.BackdropPath)
+	if len(m.Images) != 2 {
+		t.Fatalf("got %d images, want 2", len(m.Images))
+	}
+	if m.Images[0].CoverType != "poster" || m.Images[1].CoverType != "fanart" {
+		t.Errorf("coverTypes = [%q, %q], want [poster, fanart]", m.Images[0].CoverType, m.Images[1].CoverType)
+	}
+}
+
+func TestMountTMDBImages_SeriesOnlyPoster(t *testing.T) {
+	s := &SonarrSeries{ID: 1, Title: "Show", PosterPath: "/abc123.jpg"}
+	mountTMDBImages(s, s.PosterPath, s.BackdropPath)
+	if len(s.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(s.Images))
+	}
+	if s.Images[0].CoverType != "poster" {
+		t.Errorf("coverType = %q, want poster", s.Images[0].CoverType)
+	}
+}
+
+func TestMountTMDBImages_SeriesPosterAndBackdrop(t *testing.T) {
+	s := &SonarrSeries{ID: 2, Title: "Show2", PosterPath: "/poster.jpg", BackdropPath: "/back.jpg"}
+	mountTMDBImages(s, s.PosterPath, s.BackdropPath)
+	if len(s.Images) != 2 {
+		t.Fatalf("got %d images, want 2", len(s.Images))
+	}
+	if s.Images[0].CoverType != "poster" || s.Images[1].CoverType != "fanart" {
+		t.Errorf("coverTypes = [%q, %q], want [poster, fanart]", s.Images[0].CoverType, s.Images[1].CoverType)
+	}
+}
+
+func TestMountTMDBImages_EmptyPaths(t *testing.T) {
+	m := &RadarrMovie{ID: 3}
+	mountTMDBImages(m, "", "")
+	if len(m.Images) != 0 {
+		t.Errorf("images = %d, want 0 (empty paths)", len(m.Images))
+	}
+}
+
+func TestMountTMDBImages_JSONKeys(t *testing.T) {
+	m := &RadarrMovie{ID: 4, PosterPath: "/img.jpg"}
+	mountTMDBImages(m, m.PosterPath, "")
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(b)
+	if !strings.Contains(body, `"coverType"`) {
+		t.Error(`JSON missing key "coverType"`)
+	}
+	if !strings.Contains(body, `"url"`) {
+		t.Error(`JSON missing key "url"`)
+	}
+	if !strings.Contains(body, `"remoteUrl"`) {
+		t.Error(`JSON missing key "remoteUrl"`)
 	}
 }

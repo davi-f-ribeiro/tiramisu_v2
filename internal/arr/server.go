@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -39,7 +38,7 @@ func NewDBStore(db *sql.DB) *DBStore {
 // GetMovies returns all movies from arr_media.
 func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at
+		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at, poster_path, backdrop_path
 		FROM arr_media WHERE media_type = 'movie' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get movies: %w", err)
@@ -51,12 +50,17 @@ func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 		var updatedAt string
 		var m RadarrMovie
 		if err := rows.Scan(&m.ID, &m.Title, &m.Year, &m.Path,
-			&m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt); err != nil {
+			&m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt,
+			&m.PosterPath, &m.BackdropPath); err != nil {
 			return nil, fmt.Errorf("arr: scan movie: %w", err)
 		}
 		m.HasFile = true
 		m.IsAvailable = true
 		m.Monitored = true
+		m.AlternativeTitles = []AlternativeTitle{}
+		m.Genres = []string{}
+		m.Tags = []int{}
+		m.Images = []MediaImage{}
 		movies = append(movies, &m)
 	}
 	return movies, rows.Err()
@@ -67,15 +71,20 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	var m RadarrMovie
 	var updatedAt string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at
+		SELECT id, title, year, path, tmdb_id, imdb_id, raw_title, size, updated_at, poster_path, backdrop_path
 		FROM arr_media WHERE id = $1 AND media_type = 'movie'`, id).
-		Scan(&m.ID, &m.Title, &m.Year, &m.Path, &m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt)
+		Scan(&m.ID, &m.Title, &m.Year, &m.Path, &m.TmdbID, &m.ImdbID, &m.RawTitle, &m.Size, &updatedAt,
+			&m.PosterPath, &m.BackdropPath)
 	if err != nil {
 		return nil, err
 	}
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
+	m.AlternativeTitles = []AlternativeTitle{}
+	m.Genres = []string{}
+	m.Tags = []int{}
+	m.Images = []MediaImage{}
 	return &m, nil
 }
 
@@ -127,7 +136,7 @@ func (s *DBStore) DeleteARRMediaByPath(ctx context.Context, fullPath string) err
 // GetSeries returns all series from arr_media.
 func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, title, tvdb_id, imdb_id, path
+		SELECT id, title, tvdb_id, imdb_id, path, poster_path, backdrop_path
 		FROM arr_media WHERE media_type = 'series' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get series: %w", err)
@@ -137,10 +146,15 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 	var series []*SonarrSeries
 	for rows.Next() {
 		var s SonarrSeries
-		if err := rows.Scan(&s.ID, &s.Title, &s.TvdbID, &s.ImdbID, &s.Path); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.TvdbID, &s.ImdbID, &s.Path,
+			&s.PosterPath, &s.BackdropPath); err != nil {
 			return nil, fmt.Errorf("arr: scan series: %w", err)
 		}
 		s.Monitored = true
+		s.AlternativeTitles = []AlternativeTitle{}
+		s.Genres = []string{}
+		s.Tags = []int{}
+		s.Images = []MediaImage{}
 		series = append(series, &s)
 	}
 	return series, rows.Err()
@@ -150,13 +164,20 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 func (s *DBStore) GetSeriesByID(ctx context.Context, id int64) (*SonarrSeries, error) {
 	var series SonarrSeries
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, title, tvdb_id, imdb_id, path
+		SELECT id, title, tvdb_id, imdb_id, path, poster_path, backdrop_path
 		FROM arr_media WHERE id = $1 AND media_type = 'series'`, id).
-		Scan(&series.ID, &series.Title, &series.TvdbID, &series.ImdbID, &series.Path)
+		Scan(&series.ID, &series.Title, &series.TvdbID, &series.ImdbID, &series.Path,
+			&series.PosterPath, &series.BackdropPath)
 	if err != nil {
 		return nil, err
 	}
 	series.Monitored = true
+	series.AlternativeTitles = []AlternativeTitle{}
+	series.Genres = []string{}
+	series.Tags = []int{}
+	series.Images = []MediaImage{}
+	series.SeasonCount = 1
+	series.Seasons = []SonarrSeason{{SeasonNumber: 1, Monitored: true}}
 	return &series, nil
 }
 
@@ -211,24 +232,24 @@ func (s *DBStore) GetEpisodeFilesBySeries(ctx context.Context, seriesID int64) (
 
 // Handler serves the Servarr v3 API.
 type Handler struct {
-	store        MediaStore
-	storeWriter  MediaStoreWriter // nil for read-only (standalone listeners)
-	appName      string
-	urlBase      string
-	moviesDir    string
-	tvDir        string
-	logger       *log.Logger
-	mu           sync.RWMutex
+	store       MediaStore
+	storeWriter MediaStoreWriter // nil for read-only (standalone listeners)
+	appName     string
+	urlBase     string
+	moviesDir   string
+	tvDir       string
+	logger      *log.Logger
+	resolver    *TMDBResolver // optional: JIT resolve tmdb_id from imdb_id
 }
 
 // NewHandler creates a new Handler with the given store and optional app name override.
 func NewHandler(store MediaStore, opts ...HandlerOption) *Handler {
 	h := &Handler{
-		store:   store,
-		appName: "Radarr",
-		urlBase: "",
+		store:     store,
+		appName:   "Radarr",
+		urlBase:   "",
 		moviesDir: "",
-		tvDir:       "",
+		tvDir:     "",
 		logger:    log.Default(),
 	}
 	for _, opt := range opts {
@@ -263,17 +284,9 @@ func WithStoreWriter(w MediaStoreWriter) HandlerOption {
 	return func(h *Handler) { h.storeWriter = w }
 }
 
-// SetAppName overrides the application name.
-func (h *Handler) SetAppName(name string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.appName = name
-}
-
-func (h *Handler) getAppName() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.appName
+// WithResolver sets the TMDB resolver for JIT resolution of missing IDs.
+func WithResolver(r *TMDBResolver) HandlerOption {
+	return func(h *Handler) { h.resolver = r }
 }
 
 // RegisterRoutes mounts all API routes on the given ServeMux.
@@ -327,22 +340,6 @@ func jsonResponse(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
-}
-
-// defaultQuality is the baseline quality value sent in MovieFile and EpisodeFile
-// so Bazarr's parser never hits KeyError('quality').
-var defaultQuality = QualityModel{
-	Quality: QualityDetail{
-		ID:         7,
-		Name:       "WEBDL-1080p",
-		Source:     "webdl",
-		Resolution: 1080,
-	},
-	Revision: RevisionDetail{
-		Version:  1,
-		Real:     0,
-		IsRepack: false,
-	},
 }
 
 // parseQualityFromFilename infers resolution and source from a media filename
@@ -426,8 +423,8 @@ func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 
 	if h.storeWriter == nil {
 		jsonResponse(w, http.StatusServiceUnavailable, map[string]any{
-			"status":       "error",
-			"message":      "backfill not configured",
+			"status":           "error",
+			"message":          "backfill not configured",
 			"movies_indexed":   0,
 			"series_indexed":   0,
 			"episodes_indexed": 0,
@@ -438,8 +435,8 @@ func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.moviesDir == "" && h.tvDir == "" {
 		jsonResponse(w, http.StatusBadRequest, map[string]any{
-			"status":       "error",
-			"message":      "no media directories configured",
+			"status":           "error",
+			"message":          "no media directories configured",
 			"movies_indexed":   0,
 			"series_indexed":   0,
 			"episodes_indexed": 0,
@@ -470,7 +467,7 @@ func (h *Handler) handleManualSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
-	appName := h.getAppName()
+	appName := h.appName
 	if r.URL.Query().Get("app") == "sonarr" {
 		appName = "Sonarr"
 	}
@@ -512,6 +509,150 @@ func (h *Handler) handleTag(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, []any{})
 }
 
+// populateMovieFields enriches a RadarrMovie with computed title fields,
+// availability flags, images, and an optional MovieFile subobject for Bazarr.
+// Uniqueness guard: when tmdbId is absent (≤ 0) we fall back to the
+// internal arr_media.id so Bazarr never sees duplicate zero values that
+// trigger UNIQUE constraint failures.
+func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
+	if m == nil {
+		return
+	}
+	m.HasFile = true
+	m.IsAvailable = true
+	m.Monitored = true
+	m.AlternativeTitles = []AlternativeTitle{}
+	m.Genres = []string{}
+	m.Tags = []int{}
+
+	// JIT resolution: if tmdbId is zero and we have an imdbId, try to
+	// resolve it synchronously from the TMDb API (with in-memory cache).
+	if m.TmdbID <= 0 && m.ImdbID != "" && h.resolver != nil {
+		if res, err := h.resolver.ResolveIMDbID(ctx, m.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
+			m.TmdbID = res.TmdbID
+			if res.Title != "" {
+				m.Title = res.Title
+			}
+			if m.Year == 0 && res.ReleaseDate != "" {
+				m.Year = extractYearFrom(res.ReleaseDate)
+			}
+			m.PosterPath = res.PosterPath
+			m.BackdropPath = res.BackdropPath
+			// Persist to DB (fire-and-forget, non-blocking).
+			h.resolver.PersistJITResult(m.ID, res)
+		}
+	}
+
+	// Uniqueness fallback for Bazarr: tmdbId=0 would collide across
+	// multiple stubs. When absent, use the unique internal ID instead.
+	if m.TmdbID <= 0 {
+		m.TmdbID = m.ID
+	}
+
+	// Compute title fields Bazarr requires.
+	cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
+	if cleanTitle == "" {
+		cleanTitle = strings.ReplaceAll(m.RawTitle, "_", " ")
+	}
+	m.SortTitle = strings.ToLower(cleanTitle)
+	m.CleanTitle = cleanTitle
+	m.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
+	m.Status = "released"
+
+	// Mount TMDb image URLs into the images array.
+	mountTMDBImages(m, m.PosterPath, m.BackdropPath)
+
+	if m.MovieFile == nil && m.Path != "" {
+		fullPath := m.Path
+		basename := filepath.Base(fullPath)
+		rawTitle := m.RawTitle
+		if rawTitle == "" {
+			rawTitle = m.Title // fallback: use title as rawTitle if not set
+			if rawTitle == "" {
+				rawTitle = basename
+			}
+		}
+		m.RawTitle = rawTitle
+		m.MovieFile = &RadarrMovieFile{
+			ID:           m.ID,
+			MovieID:      m.ID,
+			RelativePath: basename,
+			Path:         fullPath,
+			Size:         m.Size,
+			DateAdded:    time.Now().UTC().Format(time.RFC3339),
+			Quality:      parseQualityFromFilename(m.RawTitle, basename),
+		}
+		// Directory path goes into m.Path.
+		m.Path = filepath.Dir(fullPath)
+	}
+}
+
+// mountTMDBImages builds the images array from TMDb poster/backdrop paths.
+// Always initializes v.Images to ensure the JSON field is an empty array []
+// rather than null when no images are available.
+func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
+	switch v := m.(type) {
+	case *RadarrMovie:
+		// Bazarr exige arrays, nunca null. Inicializa aqui por garantia
+		// em qualquer código-fonte (DB, JIT, stub).
+		if v.AlternativeTitles == nil {
+			v.AlternativeTitles = []AlternativeTitle{}
+		}
+		if v.Genres == nil {
+			v.Genres = []string{}
+		}
+		if v.Tags == nil {
+			v.Tags = []int{}
+		}
+		images := make([]MediaImage, 0, 2)
+		if posterPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "poster",
+				URL:       "https://image.tmdb.org/t/p/w500" + posterPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w500" + posterPath,
+			})
+		}
+		if backdropPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "fanart",
+				URL:       "https://image.tmdb.org/t/p/w1280" + backdropPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w1280" + backdropPath,
+			})
+		}
+		v.Images = images
+	case *SonarrSeries:
+		// Bazarr exige arrays, nunca null. Inicializa aqui por garantia.
+		if v.AlternativeTitles == nil {
+			v.AlternativeTitles = []AlternativeTitle{}
+		}
+		if v.Genres == nil {
+			v.Genres = []string{}
+		}
+		if v.Tags == nil {
+			v.Tags = []int{}
+		}
+		if v.Seasons == nil {
+			v.Seasons = []SonarrSeason{}
+		}
+		images := make([]MediaImage, 0, 2)
+		if posterPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "poster",
+				URL:       "https://image.tmdb.org/t/p/w500" + posterPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w500" + posterPath,
+			})
+		}
+		if backdropPath != "" {
+			images = append(images, MediaImage{
+				CoverType: "fanart",
+				URL:       "https://image.tmdb.org/t/p/w1280" + backdropPath,
+				RemoteURL: "https://image.tmdb.org/t/p/w1280" + backdropPath,
+			})
+		}
+		v.Images = images
+	}
+}
+
 func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	movies, err := h.store.GetMovies(ctx)
@@ -522,44 +663,8 @@ func (h *Handler) handleMovieList(w http.ResponseWriter, r *http.Request) {
 	if movies == nil {
 		movies = []*RadarrMovie{}
 	}
-	// Populate movieFile subobjects so Bazarr can resolve video + subtitle paths.
 	for _, m := range movies {
-		m.HasFile = true
-		m.IsAvailable = true
-		m.Monitored = true
-
-		// Fallback: if external ID is zero Bazarr treats duplicates as unique,
-		// causing UNIQUE constraint errors in table_movies.tmdbId.
-		if m.TmdbID <= 0 {
-			m.TmdbID = m.ID
-		}
-
-		// Compute title fields Bazarr requires.
-		cleanTitle := strings.ReplaceAll(m.Title, "_", " ")
-		m.SortTitle = strings.ToLower(cleanTitle)
-		m.CleanTitle = cleanTitle
-		m.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
-		m.Status = "released"
-
-		if m.MovieFile == nil && m.Path != "" {
-			fullPath := m.Path
-			basename := filepath.Base(fullPath)
-			m.RawTitle = m.Title // fallback: use title as rawTitle if not set
-			if m.RawTitle == "" {
-				m.RawTitle = basename
-			}
-			m.MovieFile = &RadarrMovieFile{
-				ID:           m.ID,
-				MovieID:      m.ID,
-				RelativePath: basename,
-				Path:         fullPath,
-				Size:         m.Size,
-				DateAdded:    time.Now().UTC().Format(time.RFC3339),
-				Quality:      parseQualityFromFilename(m.RawTitle, basename),
-			}
-			// Directory path goes into m.Path.
-			m.Path = filepath.Dir(fullPath)
-		}
+		h.populateMovieFields(ctx, m)
 	}
 	jsonResponse(w, http.StatusOK, movies)
 }
@@ -583,35 +688,7 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	movie.HasFile = true
-	movie.IsAvailable = true
-	movie.Monitored = true
-	if movie.TmdbID <= 0 {
-		movie.TmdbID = movie.ID
-	}
-	cleanTitle := strings.ReplaceAll(movie.Title, "_", " ")
-	movie.SortTitle = strings.ToLower(cleanTitle)
-	movie.CleanTitle = cleanTitle
-	movie.TitleSlug = strings.ToLower(strings.ReplaceAll(cleanTitle, " ", "-"))
-	movie.Status = "released"
-	if movie.MovieFile == nil && movie.Path != "" {
-		fullPath := movie.Path
-		basename := filepath.Base(fullPath)
-		movie.RawTitle = movie.Title // fallback
-		if movie.RawTitle == "" {
-			movie.RawTitle = basename
-		}
-		movie.MovieFile = &RadarrMovieFile{
-			ID:           movie.ID,
-			MovieID:      movie.ID,
-			RelativePath: basename,
-			Path:         fullPath,
-			Size:         movie.Size,
-			DateAdded:    time.Now().UTC().Format(time.RFC3339),
-			Quality:      parseQualityFromFilename(movie.RawTitle, basename),
-		}
-		movie.Path = filepath.Dir(fullPath)
-	}
+	h.populateMovieFields(ctx, movie)
 	jsonResponse(w, http.StatusOK, movie)
 }
 
@@ -625,10 +702,33 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	if series == nil {
 		series = []*SonarrSeries{}
 	}
+	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
+	// resolve it synchronously from the TMDb API (with in-memory cache).
 	for _, s := range series {
+		// Ensure all arrays are never null (Bazarr requires [] not None)
+		s.AlternativeTitles = []AlternativeTitle{}
+		s.Genres = []string{}
+		s.Tags = []int{}
+		s.SeasonCount = 1
+		s.Seasons = []SonarrSeason{{SeasonNumber: 1, Monitored: true}}
+		if s.TvdbID <= 0 && s.ImdbID != "" && h.resolver != nil {
+			if res, err := h.resolver.ResolveIMDbID(ctx, s.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
+				s.TvdbID = res.TmdbID
+				if res.Title != "" {
+					s.Title = res.Title
+				}
+				s.PosterPath = res.PosterPath
+				s.BackdropPath = res.BackdropPath
+				h.resolver.PersistJITResult(s.ID, res)
+			}
+		}
+		// Uniqueness fallback for Bazarr: tvdbId=0 would collide across
+		// multiple stubs. When absent, use the unique internal ID instead.
 		if s.TvdbID <= 0 {
 			s.TvdbID = s.ID
 		}
+		// Mount TMDb image URLs into the images array.
+		mountTMDBImages(s, s.PosterPath, s.BackdropPath)
 	}
 	jsonResponse(w, http.StatusOK, series)
 }
@@ -652,9 +752,25 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
+	// resolve it synchronously from the TMDb API (with in-memory cache).
+	if series.TvdbID <= 0 && series.ImdbID != "" && h.resolver != nil {
+		if res, err := h.resolver.ResolveIMDbID(ctx, series.ImdbID); err == nil && res != nil && res.TmdbID > 0 {
+			series.TvdbID = res.TmdbID
+			if res.Title != "" {
+				series.Title = res.Title
+			}
+			series.PosterPath = res.PosterPath
+			series.BackdropPath = res.BackdropPath
+			h.resolver.PersistJITResult(series.ID, res)
+		}
+	}
+	// Uniqueness fallback for Bazarr: tvdbId=0 uses unique internal ID.
 	if series.TvdbID <= 0 {
 		series.TvdbID = series.ID
 	}
+	// Mount TMDb image URLs into the images array.
+	mountTMDBImages(series, series.PosterPath, series.BackdropPath)
 	jsonResponse(w, http.StatusOK, series)
 }
 

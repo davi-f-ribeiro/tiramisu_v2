@@ -173,6 +173,15 @@ CREATE INDEX IF NOT EXISTS idx_arr_media_series ON arr_media(series_id);
 		return err
 	}
 
+	// Apply post-creation migrations (for existing databases that need
+	// columns added to tables created by earlier code versions).
+	if err := d.migrateARRMedia(); err != nil {
+		return err
+	}
+	if err := d.migrateARRMediaTMDB(); err != nil {
+		return err
+	}
+
 	// V750: Register schema versions
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'initial schema')`)
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'add playback_states table')`)

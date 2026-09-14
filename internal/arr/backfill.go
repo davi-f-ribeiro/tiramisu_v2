@@ -47,6 +47,7 @@ type MediaStoreWriter interface {
 var (
 	reSE          = regexp.MustCompile(`[Ss](\d{1,3})[Ee](\d{1,3})`)
 	reYearInTitle = regexp.MustCompile(`[(\s](19\d{2}|20[0-2]\d)[)]`)
+	reTMDB        = regexp.MustCompile(`[Tt]mdb[ _]?(\d+)`)
 )
 
 // RunBackfill scans existing stub files on disk and populates arr_media.
@@ -241,7 +242,13 @@ func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger
 		seriesList = append(seriesList, seriesEntry{id: id, showDir: sd})
 	}
 
-	// Register episodes linked to their series
+	// Register episodes linked to their series.
+	// Use a map for O(1) lookup instead of O(N×M) linear scan.
+	seriesDirToID := make(map[string]int64, len(seriesList))
+	for _, se := range seriesList {
+		seriesDirToID[se.showDir] = se.id
+	}
+
 	for _, ep := range episodes {
 		select {
 		case <-ctx.Done():
@@ -249,18 +256,12 @@ func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger
 		default:
 		}
 
-		var found *seriesEntry
-		for i := range seriesList {
-			if seriesList[i].showDir == ep.showDir {
-				found = &seriesList[i]
-				break
-			}
-		}
-		if found == nil {
+		seriesID, ok := seriesDirToID[ep.showDir]
+		if !ok {
 			continue
 		}
 
-		if err := db.UpsertARREpisode(ctx, found.id, ep.season, ep.ep, ep.title, ep.path, ep.size); err != nil {
+		if err := db.UpsertARREpisode(ctx, seriesID, ep.season, ep.ep, ep.title, ep.path, ep.size); err != nil {
 			logger.Printf("[ARR backfill] episode %s: %v", filepath.Base(ep.path), err)
 			stats.ErrorsCount++
 		} else {
@@ -272,8 +273,7 @@ func backfillSeries(ctx context.Context, dir string, db MediaStoreWriter, logger
 }
 
 func extractTMDBID(filename string) int {
-	re := regexp.MustCompile(`[Tt]mdb[ _]?(\d+)`)
-	matches := re.FindStringSubmatch(filename)
+	matches := reTMDB.FindStringSubmatch(filename)
 	if len(matches) >= 2 {
 		if id, err := strconv.Atoi(matches[1]); err == nil {
 			return id

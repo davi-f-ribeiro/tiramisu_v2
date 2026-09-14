@@ -443,6 +443,13 @@ func LoadConfig() Config {
 		"watchlist": {ScriptPath: filepath.Join(scriptsDir, "plex-watchlist-sync.py"), LogsDir: logsDir},
 	}
 
+	// 5.5. Env override for TMDB_API_KEY
+	if cfg.TMDBAPIKey == "" {
+		if v := os.Getenv("TMDB_API_KEY"); v != "" {
+			cfg.TMDBAPIKey = v
+		}
+	}
+
 	// 6. Generate Telemetry ID if missing
 	if cfg.TelemetryID == "" {
 		cfg.TelemetryID = uuid.New().String()

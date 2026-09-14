@@ -8,7 +8,7 @@ name: Docker Publish
 
 on:
   push:
-    branches: [ main, merge-upstream-test ]
+    branches: [ main, merge-upstream-test, 'fix/**' ]
     tags: [ 'v*.*.*' ]
   workflow_dispatch:
 

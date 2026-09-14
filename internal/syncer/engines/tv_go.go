@@ -27,25 +27,24 @@ import (
 
 // TVGoEngine is the pure Go implementation of TV sync.
 type TVGoEngine struct {
-	gostorm   *GoStormClient
-	tmdb      *tmdb.Client
-	torrentio *torrentio.Client
-	prowlarr  *prowlarr.Client
-	plexURL   string
-	plexToken string
-	plexTVLib int
-	mediasrv  mediaserver.Client
-	tvDir     string
+	gostorm       *GoStormClient
+	tmdb          *tmdb.Client
+	torrentio     *torrentio.Client
+	prowlarr      *prowlarr.Client
+	plexURL       string
+	plexToken     string
+	plexTVLib     int
+	mediasrv      mediaserver.Client
+	tvDir         string
 	fuseMountPath string
-	sourcePath  string // FUSE mount root (e.g. /mnt/tiramisu-mkv-real)
-	stateDir  string
-	limiter   *rate.Limiter
-	logger    *log.Logger
+	sourcePath    string // FUSE mount root (e.g. /mnt/tiramisu-mkv-real)
+	stateDir      string
+	limiter       *rate.Limiter
+	logger        *log.Logger
 
 	registry     map[string]TVEpisodeEntry
 	registryFile string
-	db           *metadb.DB // V1.7.1: Optional SQLite backend
-	metadb       *metadb.DB // ARR catalog backend
+	db           *metadb.DB // V1.7.1: Optional SQLite backend (ARR catalog)
 
 	processedThisRun map[string]bool
 	stats            TVSyncStats
@@ -53,7 +52,7 @@ type TVGoEngine struct {
 	blacklist     BlacklistData
 	blacklistFile string
 
-	arrSeriesID   int64 // ARR series catalog ID (set in processShow, used by processFullpack/processSingle)
+	arrSeriesID int64 // ARR series catalog ID (set in processShow, used by processFullpack/processSingle)
 
 	invalidatePath func(string)
 
@@ -251,6 +250,11 @@ func (e *TVGoEngine) removeStub(ctx context.Context, path, hash string) {
 
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
+	}
+
+	// Clean ARR catalog entry for episodes
+	if e.db != nil {
+		_ = e.db.DeleteARRMediaByPath(ctx, path)
 	}
 }
 

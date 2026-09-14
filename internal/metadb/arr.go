@@ -149,3 +149,42 @@ func (d *DB) GetARREpisodeByPath(ctx context.Context, path string) (*ARREpisode,
 	e.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	return &e, nil
 }
+
+// UnresolvedMedia represents a movie or series row that has imdb_id but no tmdb_id.
+type UnresolvedMedia struct {
+	ID        int64
+	MediaType string
+	IMDBID    string
+}
+
+// GetUnresolvedARRMedia returns media records where tmdb_id is 0 and imdb_id is not empty.
+func (d *DB) GetUnresolvedARRMedia(ctx context.Context) ([]UnresolvedMedia, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT id, media_type, imdb_id FROM arr_media
+		 WHERE tmdb_id = 0 AND imdb_id != '' AND media_type IN ('movie', 'series')`)
+	if err != nil {
+		return nil, fmt.Errorf("metadb: get unresolved ARR media: %w", err)
+	}
+	defer rows.Close()
+
+	var result []UnresolvedMedia
+	for rows.Next() {
+		var m UnresolvedMedia
+		if err := rows.Scan(&m.ID, &m.MediaType, &m.IMDBID); err != nil {
+			return nil, fmt.Errorf("metadb: scan unresolved media: %w", err)
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// UpsertARRMediaTMDB updates tmdb_id, year, title, poster_path and backdrop_path for a given
+// arr_media row by ID.
+func (d *DB) UpsertARRMediaTMDB(ctx context.Context, mediaID, tmdbID int64, year int, title, posterPath, backdropPath string) error {
+	query := `UPDATE arr_media SET tmdb_id = $1, year = $2, title = $3, poster_path = $4, backdrop_path = $5, updated_at = datetime('now') WHERE id = $6`
+	_, err := d.db.ExecContext(ctx, query, tmdbID, year, title, posterPath, backdropPath, mediaID)
+	if err != nil {
+		return fmt.Errorf("metadb: upsert ARR media tmdb: %w", err)
+	}
+	return nil
+}

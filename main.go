@@ -30,6 +30,7 @@ import (
 	"syscall"
 	"time"
 	"tiramisu/internal/ai"
+	"tiramisu/internal/arr"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/config"
@@ -51,16 +52,16 @@ import (
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/registry"
-	"tiramisu/internal/arr"
+	"tiramisu/internal/subprovider"
+	syncer "tiramisu/internal/syncer"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/syncer/engines"
-	syncer "tiramisu/internal/syncer"
 	"tiramisu/internal/syncer/scheduler"
 	"tiramisu/internal/telemetry"
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
-	"tiramisu/internal/subprovider"
+	tmdbpkg "tiramisu/internal/catalog/tmdb"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -555,9 +556,16 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return child, 0
 	}
 
-	node := &fs.LoopbackNode{RootData: &fs.LoopbackRoot{Path: r.sourcePath}}
-	stable := fs.StableAttr{Mode: uint32(st.Mode & syscall.S_IFMT)}
+	// Physical file passthrough (non-mkv files at root level)
+	node := &PhysicalFileNode{path: fullPath}
+	stable := fs.StableAttr{
+		Mode: uint32(st.Mode & syscall.S_IFMT),
+		Ino:  st.Ino,
+		Gen:  1,
+	}
 	child := r.NewInode(ctx, node, stable)
+	fillAttrFromStat(&st, &out.Attr)
+	out.Ino = st.Ino
 	return child, 0
 }
 
@@ -714,6 +722,18 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 					Off:  uint64(i + 1),
 				})
 			}
+		} else {
+			// All other physical files (nfo, sub, idx, txt, etc.) must be visible
+			st := syscall.Stat_t{}
+			if err := syscall.Stat(fullPath, &st); err == nil && (st.Mode&syscall.S_IFMT) == syscall.S_IFREG {
+				ino := getFileInodeFromMap(fullPath)
+				result = append(result, fuse.DirEntry{
+					Name: e.Name(),
+					Mode: syscall.S_IFREG,
+					Ino:  ino,
+					Off:  uint64(i + 1),
+				})
+			}
 		}
 	}
 
@@ -748,7 +768,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		st := syscall.Stat_t{}
 		if err := syscall.Stat(fullPath, &st); err == nil && (st.Mode&syscall.S_IFMT) == syscall.S_IFREG {
 			ino := getFileInodeFromMap(fullPath)
-			node := &fs.LoopbackNode{RootData: &fs.LoopbackRoot{Path: fullPath}}
+			node := &PhysicalFileNode{path: fullPath}
 			stable := fs.StableAttr{
 				Mode: uint32(st.Mode & syscall.S_IFMT),
 				Ino:  ino,
@@ -783,7 +803,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	// Passthrough para outros arquivos físicos (regulares não-mkv não-virtuais)
-	node := &fs.LoopbackNode{RootData: &fs.LoopbackRoot{Path: fullPath}}
+	node := &PhysicalFileNode{path: fullPath}
 	stable := fs.StableAttr{
 		Mode: uint32(st.Mode & syscall.S_IFMT),
 		Ino:  st.Ino,
@@ -903,6 +923,56 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 
 	logger.Printf("UNLINK COMPLETE: file deleted successfully")
 	return 0
+}
+
+// PhysicalFileNode - serve un file fisico esistente sul disco (sottotitoli, nfo, ecc.)
+type PhysicalFileNode struct {
+	fs.Inode
+	path string
+}
+
+// Compile-time interface checks for PhysicalFileNode
+var _ fs.NodeGetattrer = (*PhysicalFileNode)(nil)
+var _ fs.NodeOpener = (*PhysicalFileNode)(nil)
+var _ fs.FileReader = (*physicalFileHandle)(nil)
+var _ fs.FileReleaser = (*physicalFileHandle)(nil)
+
+func (n *PhysicalFileNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	st := syscall.Stat_t{}
+	if err := syscall.Lstat(n.path, &st); err != nil {
+		logger.Printf("PHYSICAL FILE GETATTR ERROR: %v", err)
+		return vfs.ToErrno(err)
+	}
+	fillAttrFromStat(&st, &out.Attr)
+	out.Ino = st.Ino
+	out.Mode = 0666
+	return 0
+}
+
+type physicalFileHandle struct {
+	file *os.File
+}
+
+func (h *physicalFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	n, err := h.file.ReadAt(dest, off)
+	if err != nil {
+		return nil, vfs.ToErrno(err)
+	}
+	return fuse.ReadResultData(dest[:n]), 0
+}
+
+func (h *physicalFileHandle) Release(ctx context.Context) syscall.Errno {
+	h.file.Close()
+	return 0
+}
+
+func (n *PhysicalFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	file, err := os.Open(n.path)
+	if err != nil {
+		logger.Printf("PHYSICAL FILE OPEN ERROR: %v", err)
+		return nil, 0, vfs.ToErrno(err)
+	}
+	return &physicalFileHandle{file: file}, 0, 0
 }
 
 // VirtualMkvNode - nodo per singolo file .mkv virtuale
@@ -4128,21 +4198,27 @@ func main() {
 
 		standaloneLogger := log.New(os.Stderr, "[ARR backfill] ", 0)
 
-		// Create a minimal in-memory DB for the backfill
-		tmpDB, err := metadb.New("", nil)
+		// Open the persistent state DB so backfill writes survive process exit.
+		dbDir := filepath.Dir(dbPath)
+		dbPathFile := filepath.Join(dbDir, ".tiramisu", "tiramisu.db")
+		persistDB, err := metadb.New(dbPathFile, standaloneLogger)
 		if err != nil {
 			standaloneLogger.Printf("FAIL: metadb: %v", err)
 			os.Exit(1)
 		}
-		defer tmpDB.Close()
 
-		store := arr.NewDBStore(tmpDB.SQL())
+		store := arr.NewDBStore(persistDB.SQL())
 		stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, store, standaloneLogger)
 		if err != nil {
 			standaloneLogger.Printf("FAIL: %v", err)
 		}
 		standaloneLogger.Printf("DONE: %d movies, %d series, %d episodes (%dms)",
 			stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
+
+		// Close and flush WAL before exiting.
+		if err := persistDB.Close(); err != nil {
+			standaloneLogger.Printf("WARN: close db: %v", err)
+		}
 
 		if err != nil {
 			os.Exit(1)
@@ -4346,16 +4422,30 @@ func main() {
 	// ARR Virtual Catalog: register Servarr v3 API routes on the default mux,
 	// launch dedicated :7878 (:radarr) and :8989 (:sonarr) listeners, and start
 	// an async backfill so pre-existing stubs appear in the catalog.
+	var tmdbResolver *arr.TMDBResolver
+	if cfg.TMDBAPIKey != "" && stateDB != nil {
+		tmdbResolver = arr.NewTMDBResolver(&arr.ResolveConfig{
+			Client:     tmdbpkg.NewClient(cfg.TMDBAPIKey),
+			DB:         stateDB,
+			Logger:     logger,
+			MaxRetry:   3,
+			RetryDelay: 2 * time.Second,
+		})
+	}
+
 	if stateDB != nil {
 		moviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
 		tvDir := filepath.Join(gc().PhysicalSourcePath, "tv")
 		arrStore := arr.NewDBStore(stateDB.SQL())
-		arrHandler := arr.NewHandler(
-			arrStore,
+		opts := []arr.HandlerOption{
 			arr.WithStoreWriter(arrStore),
 			arr.WithDirs(moviesDir, tvDir),
 			arr.WithLogger(logger),
-		)
+		}
+		if tmdbResolver != nil {
+			opts = append(opts, arr.WithResolver(tmdbResolver))
+		}
+		arrHandler := arr.NewHandler(arrStore, opts...)
 		arrHandler.RegisterRoutes(http.DefaultServeMux)
 
 		// Derive a cancellable context for ARR listeners; cancelled when
@@ -4369,16 +4459,23 @@ func main() {
 		_ = arr.StartStandaloneListeners(arrCtx, arrStore)
 		logger.Printf("[ARR] Radarr/Sonarr API v3 facade active (ports :7878/:8989)")
 
-		// Async backfill: catalog pre-existing stubs in background
-		go func() {
-			stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger)
-			if err != nil {
-				logger.Printf("[ARR] backfill error: %v", err)
-			} else {
-				logger.Printf("[ARR] backfill done: %d movies, %d series, %d eps (%dms)",
-					stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
-			}
-		}()
+		// Run online backfill BEFORE the scheduler so it completes synchronously
+		// and does not race with stub creation/removal.
+		// Uses arrCtx (cancellable by backgroundStopChan) so SIGTERM
+		// interrupts the backfill before the DB is closed.
+		stats, err := arr.RunBackfill(context.Background(), moviesDir, tvDir, arrStore, logger)
+		if err != nil {
+			logger.Printf("[ARR] backfill error: %v", err)
+		} else {
+			logger.Printf("[ARR] backfill done: %d movies, %d series, %d eps (%dms)",
+				stats.MoviesIndexed, stats.SeriesIndexed, stats.EpisodesIndexed, stats.DurationMs)
+		}
+
+		// Start background TMDB resolver to periodically update missing
+		// tmdb_id / year records using the same shared in-memory cache.
+		if tmdbResolver != nil {
+			tmdbResolver.Run(arrCtx)
+		}
 	}
 
 	// Pre-populate cache at startup to improve Plex scan performance.
@@ -4895,7 +4992,7 @@ func main() {
 	// Stub Management API
 	stubsMoviesDir := filepath.Join(gc().PhysicalSourcePath, "movies")
 	stubsTVDir := filepath.Join(gc().PhysicalSourcePath, "tv")
-	
+
 	// Create dedicated stub management engines (don't share with scheduler to avoid side-effects)
 	movieStubEngine := engines.NewMovieGoEngine(engines.MovieEngineConfig{
 		GoStormURL:      gc().GoStormBaseURL,
@@ -4914,7 +5011,7 @@ func main() {
 		Weights:         gc().QualityScoringConfig.MovieWeights(),
 		InvalidatePath:  invalidateSyncRemovedPath,
 	})
-	
+
 	tvStubEngine := engines.NewTVGoEngine(engines.TVEngineConfig{
 		GoStormURL:      gc().GoStormBaseURL,
 		TMDBAPIKey:      gc().TMDBAPIKey,
@@ -4932,13 +5029,13 @@ func main() {
 		Weights:         gc().QualityScoringConfig.TVWeights(),
 		InvalidatePath:  invalidateSyncRemovedPath,
 	}, nil)
-	
+
 	movieStubAPI := engines.NewMovieStubAPI(movieStubEngine)
 	tvStubAPI := engines.NewTVStubAPI(tvStubEngine)
-	
+
 	stubsHandler := syncer.NewStubsHandler(movieStubAPI, tvStubAPI, stubsMoviesDir, stubsTVDir)
 	stubsHandler.RegisterRoutes(http.DefaultServeMux)
-	
+
 	// Serve stub management HTML page
 	stubsHTML, loadErr := dashboard.StubManagementContent()
 	if loadErr != nil {
