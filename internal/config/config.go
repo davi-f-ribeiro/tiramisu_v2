@@ -150,6 +150,14 @@ type LanguageConfig struct {
 	ExcludedFlags  []string `json:"excluded_flags"`
 }
 
+// BazarrConfig holds the configuration for connecting to a Bazarr/Bazarr+ instance
+// to perform subtitle search and download via its v3 API (Radarr/Sonarr-compatible).
+type BazarrConfig struct {
+	Enabled bool   `json:"enabled"`
+	URL     string `json:"url"`     // e.g. "http://bazarr:6767"
+	APIKey  string `json:"api_key"` // Bazarr API key (or Bazarr+ Distribution Hub token)
+}
+
 // Config holds all configurable parameters for the FUSE proxy
 type Config struct {
 	// --- Internal / Derived Fields ---
@@ -277,6 +285,9 @@ type Config struct {
 		MaxResults   int    `json:"max_results"`    // default: 5
 	} `json:"subtitle"`
 
+	// --- Bazarr Integration (Jellyfin subtitle provider) ---
+	Bazarr BazarrConfig `json:"bazarr"`
+
 	// --- Engine Scripts (populated in LoadConfig, not from JSON) ---
 	EngineScripts map[string]EngineConfig `json:"-"`
 
@@ -359,6 +370,12 @@ func LoadConfig() Config {
 			MoviesSync:    DailyJobConfig{Enabled: true, DaysOfWeek: []int{1, 4}, Hour: 3, Minute: 0},
 			TVSync:        DailyJobConfig{Enabled: true, DaysOfWeek: []int{3, 5}, Hour: 4, Minute: 0},
 			WatchlistSync: WatchlistSyncConfig{Enabled: true, IntervalHours: 1},
+		},
+
+		Bazarr: BazarrConfig{
+			Enabled: false,
+			URL:     "",
+			APIKey:  "",
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",
