@@ -53,7 +53,6 @@ import (
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/registry"
 	"tiramisu/internal/subprovider"
-	"tiramisu/internal/bazarr"
 	syncer "tiramisu/internal/syncer"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/syncer/engines"
@@ -94,7 +93,6 @@ var nativeBridge *native.NativeClient
 var globalCleanupManager *CleanupManager
 var globalTorrentRemover *TorrentRemover
 var globalSubtitleEngine *subprovider.SubtitleEngine
-var bazarrClient *bazarr.Client
 var globalConfig atomic.Pointer[config.Config]
 
 func gc() *config.Config { return globalConfig.Load() }
@@ -4560,13 +4558,6 @@ func main() {
 		}
 	}
 
-	// Initialize Bazarr client for Jellyfin subtitle provider
-	if gc().Bazarr.Enabled && gc().Bazarr.URL != "" && gc().Bazarr.APIKey != "" {
-		bazarrClient = bazarr.NewClient(gc().Bazarr.URL, gc().Bazarr.APIKey)
-		logger.Printf("[BAZARR] Bazarr client initialized (url=%s, apiKey=%s...)", gc().Bazarr.URL, gc().Bazarr.APIKey[:min(4, len(gc().Bazarr.APIKey))])
-	} else if gc().Bazarr.Enabled && (gc().Bazarr.URL == "" || gc().Bazarr.APIKey == "") {
-		logger.Printf("[BAZARR] WARNING: Bazarr enabled but URL or APIKey is empty")
-	}
 
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
@@ -5081,12 +5072,6 @@ func main() {
 	http.HandleFunc("/api/plex-thumb", dashHandler.PlexThumb)
 	http.HandleFunc("/api/kill-stream/", dashHandler.KillStream)
 	http.HandleFunc("/api/subtitle/resync", handleSubtitleResync)
-	// Subtitle search/download routes for Jellyfin integration (Tiramisu Bazarr)
-	if bazarrClient != nil && stateDB != nil {
-		subHandler := arr.NewSubtitleHandler(arr.NewDBStore(stateDB.SQL()), bazarrClient, gc().PhysicalSourcePath, "")
-		subHandler.RegisterSubtitlesRoutes(http.DefaultServeMux)
-		logger.Printf("[SUB] Subtitle search/download routes registered for Jellyfin integration")
-	}
 	safeGo(func() {
 		monCollector.Run(backgroundStopChan)
 	})

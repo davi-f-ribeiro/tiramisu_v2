@@ -1,6 +1,8 @@
 module tiramisu
 
-go 1.26.0
+go 1.24.0
+
+toolchain go1.24.2
 
 require github.com/hanwen/go-fuse/v2 v2.11.0
 

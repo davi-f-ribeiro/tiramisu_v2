@@ -297,10 +297,16 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v3/qualityprofile", h.handleQualityProfile)
 	mux.HandleFunc("GET /api/v3/tag", h.handleTag)
 	mux.HandleFunc("GET /api/v3/languageprofile", h.handleEmptyArray)
-	mux.HandleFunc("GET /api/v3/movie", h.handleMovieList)
-	mux.HandleFunc("/api/v3/movie/", h.handleMovieDetail)
-	mux.HandleFunc("GET /api/v3/series", h.handleSeriesList)
-	mux.HandleFunc("/api/v3/series/", h.handleSeriesDetail)
+	// movie list and detail
+	mux.HandleFunc("GET /api/v3/movie", h.handleMovieOrDetail)
+	mux.HandleFunc("GET /api/v3/movie/", h.handleMovieOrDetail)
+	mux.HandleFunc("GET /api/v3/movie/{id}", h.handleMovieDetail)
+	mux.HandleFunc("GET /api/v3/movie/{id}/", h.handleMovieDetail)
+	// series list and detail
+	mux.HandleFunc("GET /api/v3/series", h.handleSeriesOrDetail)
+	mux.HandleFunc("GET /api/v3/series/", h.handleSeriesOrDetail)
+	mux.HandleFunc("GET /api/v3/series/{id}", h.handleSeriesDetail)
+	mux.HandleFunc("GET /api/v3/series/{id}/", h.handleSeriesDetail)
 	mux.HandleFunc("GET /api/v3/episode", h.handleEpisodesBySeries)
 	mux.HandleFunc("GET /api/v3/episodefile", h.handleEpisodeFilesBySeries)
 
@@ -310,10 +316,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/qualityprofile", h.handleQualityProfile)
 	mux.HandleFunc("/api/tag", h.handleTag)
 	mux.HandleFunc("/api/languageprofile", h.handleEmptyArray)
-	mux.HandleFunc("/api/movie", h.handleMovieList)
-	mux.HandleFunc("/api/movie/", h.handleMovieDetail)
-	mux.HandleFunc("/api/series", h.handleSeriesList)
-	mux.HandleFunc("/api/series/", h.handleSeriesDetail)
+	mux.HandleFunc("/api/movie", h.handleMovieOrDetail)
+	mux.HandleFunc("/api/movie/{id}", h.handleMovieDetail)
+	mux.HandleFunc("/api/series", h.handleSeriesOrDetail)
+	mux.HandleFunc("/api/series/{id}", h.handleSeriesDetail)
 	mux.HandleFunc("/api/episode", h.handleEpisodesBySeries)
 	mux.HandleFunc("/api/episodefile", h.handleEpisodeFilesBySeries)
 
@@ -329,11 +335,79 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v3/signalr/negotiate", h.handleSignalRNegotiate)
 	mux.HandleFunc("/api/v3/signalr", h.handleSignalRNegotiate)
 
+
 	// Endpoints adicionais que o Bazarr consulta no sync
 	mux.HandleFunc("/api/v3/command", h.handleEmptyArray)
 	mux.HandleFunc("/api/v3/health", h.handleEmptyArray)
 	mux.HandleFunc("/api/v3/diskspace", h.handleEmptyArray)
 }
+// handleMovieOrDetail dispatches GET /api/v3/movie (list) and GET /api/v3/movie/{id} (detail).
+func (h *Handler) handleMovieOrDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.URL.Path
+	var rest string
+	switch {
+	case strings.HasPrefix(path, "/api/v3/movie/"):
+		rest = strings.TrimPrefix(path, "/api/v3/movie/")
+	rest = strings.TrimSuffix(rest, "/")
+	case path == "/api/v3/movie":
+		rest = ""
+	case strings.HasPrefix(path, "/api/movie/"):
+		rest = strings.TrimPrefix(path, "/api/movie/")
+		rest = strings.TrimSuffix(rest, "/")
+	case path == "/api/movie":
+		rest = ""
+	}
+	if rest == "" {
+		h.handleMovieList(w, r)
+		return
+	}
+	// If rest is a valid integer, treat as ID and fetch detail
+	if _, err := strconv.ParseInt(rest, 10, 64); err == nil {
+		h.handleMovieDetail(w, r)
+		return
+	}
+	// Otherwise serve list (e.g. /api/v3/movie/something-not-a-number)
+	h.handleMovieList(w, r)
+}
+
+// handleSeriesOrDetail dispatches GET /api/v3/series (list) and GET /api/v3/series/{id} (detail).
+func (h *Handler) handleSeriesOrDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := r.URL.Path
+	var rest string
+	switch {
+	case strings.HasPrefix(path, "/api/v3/series/"):
+		rest = strings.TrimPrefix(path, "/api/v3/series/")
+	rest = strings.TrimSuffix(rest, "/")
+	case path == "/api/v3/series":
+		rest = ""
+	case strings.HasPrefix(path, "/api/series/"):
+		rest = strings.TrimPrefix(path, "/api/series/")
+		rest = strings.TrimSuffix(rest, "/")
+	case path == "/api/series":
+		rest = ""
+	}
+	if rest == "" {
+		h.handleSeriesList(w, r)
+		return
+	}
+	// If rest is a valid integer, treat as ID and fetch detail
+	if _, err := strconv.ParseInt(rest, 10, 64); err == nil {
+		h.handleSeriesDetail(w, r)
+		return
+	}
+	// Otherwise serve list
+	h.handleSeriesList(w, r)
+}
+
+
 
 // jsonResponse writes a JSON response with proper headers.
 func jsonResponse(w http.ResponseWriter, status int, v any) {
@@ -673,6 +747,7 @@ func (h *Handler) handleMovieDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pathParts := strings.TrimPrefix(r.URL.Path, "/api/v3/movie/")
 	pathParts = strings.TrimPrefix(pathParts, "/api/movie/")
+	pathParts = strings.TrimSuffix(pathParts, "/")
 	id, err := strconv.ParseInt(pathParts, 10, 64)
 	if err != nil {
 		http.Error(w, "invalid movie id", http.StatusBadRequest)
@@ -737,6 +812,7 @@ func (h *Handler) handleSeriesDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pathParts := strings.TrimPrefix(r.URL.Path, "/api/v3/series/")
 	pathParts = strings.TrimPrefix(pathParts, "/api/series/")
+	pathParts = strings.TrimSuffix(pathParts, "/")
 	id, err := strconv.ParseInt(pathParts, 10, 64)
 	if err != nil {
 		http.Error(w, "invalid series id", http.StatusBadRequest)
