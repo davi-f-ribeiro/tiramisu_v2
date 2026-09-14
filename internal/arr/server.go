@@ -593,6 +593,17 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
 	switch v := m.(type) {
 	case *RadarrMovie:
+		// Bazarr exige arrays, nunca null. Inicializa aqui por garantia
+		// em qualquer código-fonte (DB, JIT, stub).
+		if v.AlternativeTitles == nil {
+			v.AlternativeTitles = []AlternativeTitle{}
+		}
+		if v.Genres == nil {
+			v.Genres = []string{}
+		}
+		if v.Tags == nil {
+			v.Tags = []int{}
+		}
 		images := make([]MediaImage, 0, 2)
 		if posterPath != "" {
 			images = append(images, MediaImage{
@@ -610,6 +621,19 @@ func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
 		}
 		v.Images = images
 	case *SonarrSeries:
+		// Bazarr exige arrays, nunca null. Inicializa aqui por garantia.
+		if v.AlternativeTitles == nil {
+			v.AlternativeTitles = []AlternativeTitle{}
+		}
+		if v.Genres == nil {
+			v.Genres = []string{}
+		}
+		if v.Tags == nil {
+			v.Tags = []int{}
+		}
+		if v.Seasons == nil {
+			v.Seasons = []SonarrSeason{}
+		}
 		images := make([]MediaImage, 0, 2)
 		if posterPath != "" {
 			images = append(images, MediaImage{
