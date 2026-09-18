@@ -1470,6 +1470,45 @@
                     </div>
 
                     <div class="form-section">
+                        <div class="form-section-title">Bazarr Virtual Subtitles</div>
+
+                        <div class="form-group">
+                            <div class="toggle-row">
+                                <label>Enabled</label>
+                                <label class="switch"><input type="checkbox" id="bazarr_enabled"
+                                        form="tiramisu-form"><span class="slider"></span></label>
+                            </div>
+                            <div class="hint">Expose virtual pt-BR .srt files from Bazarr in the FUSE mount.</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Bazarr URL</label>
+                            <input type="text" id="bazarr_url" form="tiramisu-form" placeholder="http://127.0.0.1:6789">
+                        </div>
+
+                        <div class="form-group">
+                            <label>Bazarr API Key</label>
+                            <input type="password" id="bazarr_api_key" form="tiramisu-form" placeholder="Leave blank to keep existing key">
+                            <div class="hint" id="bazarr_api_key_hint"></div>
+                        </div>
+
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Timeout Seconds</label>
+                                <input type="number" id="bazarr_timeout_seconds" form="tiramisu-form" min="1" max="120" value="30">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Results</label>
+                                <input type="number" id="bazarr_max_results" form="tiramisu-form" min="1" max="50" value="5">
+                            </div>
+                        </div>
+
+                        <button type="button" class="btn btn-primary" onclick="saveBazarr()"
+                            style="margin-top: 12px;">Apply Bazarr Settings</button>
+                        <div id="bazarr-save-status" class="status-msg"></div>
+                    </div>
+
+                    <div class="form-section">
                         <div class="form-section-title">Quality Scoring</div>
 
                         <div class="preset-row">
@@ -2897,6 +2936,42 @@
             if (res.ok) loadSubtitle();
         }
 
+        async function loadBazarr() {
+            try {
+                const res = await fetch('/api/v1/config/bazarr');
+                const cfg = await res.json();
+                document.getElementById('bazarr_enabled').checked = cfg.enabled || false;
+                document.getElementById('bazarr_url').value = cfg.url || 'http://127.0.0.1:6789';
+                document.getElementById('bazarr_timeout_seconds').value = cfg.timeout_seconds || 30;
+                document.getElementById('bazarr_max_results').value = cfg.max_results || 5;
+                document.getElementById('bazarr_api_key').value = '';
+                document.getElementById('bazarr_api_key_hint').textContent = cfg.has_api_key ? 'API key is configured. Leave blank to keep it.' : 'No API key configured.';
+            } catch (e) { console.error('Bazarr load error', e); }
+        }
+
+        async function saveBazarr() {
+            const status = document.getElementById('bazarr-save-status');
+            const payload = {
+                enabled: document.getElementById('bazarr_enabled').checked,
+                url: document.getElementById('bazarr_url').value.trim(),
+                timeout_seconds: parseInt(document.getElementById('bazarr_timeout_seconds').value) || 30,
+                max_results: parseInt(document.getElementById('bazarr_max_results').value) || 5
+            };
+            const apiKey = document.getElementById('bazarr_api_key').value;
+            if (apiKey !== '') payload.api_key = apiKey.trim();
+
+            const res = await fetch('/api/v1/config/bazarr', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            status.textContent = res.ok ? '✓ Bazarr settings saved' : '✗ Save error';
+            status.className = 'status-msg ' + (res.ok ? 'status-success' : 'status-error');
+            setTimeout(() => { status.className = 'status-msg'; }, 5000);
+            if (res.ok) loadBazarr();
+        }
+
         // Build pickers then load data
         buildDayPicker('sched-movies-days');
         buildDayPicker('sched-tv-days');
@@ -2905,6 +2980,7 @@
 
         // Load subtitle data
         loadSubtitle();
+        loadBazarr();
 
     </script>
 </body>

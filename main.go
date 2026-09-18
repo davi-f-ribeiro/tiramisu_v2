@@ -33,6 +33,7 @@ import (
 	"tiramisu/internal/arr"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
+	tmdbpkg "tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/config"
 	server "tiramisu/internal/gostorm"
 	"tiramisu/internal/gostorm/native"
@@ -61,7 +62,6 @@ import (
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
-	tmdbpkg "tiramisu/internal/catalog/tmdb"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -488,7 +488,8 @@ func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 // VirtualMkvRoot - nodo radice per file virtuali .mkv
 type VirtualMkvRoot struct {
 	fs.Inode
-	sourcePath string
+	sourcePath       string
+	subtitleProvider subprovider.SubtitleProvider
 }
 
 // Compile-time interface checks - verificano che implementiamo correttamente le interfacce
@@ -536,6 +537,23 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 		}
 	}
 
+	if strings.HasSuffix(name, ".srt") {
+		if entry, ok := lookupBazarrVirtualSRT(r.sourcePath, name, r.subtitleProvider); ok {
+			ino := getFileInodeFromMap(fullPath)
+			node := &VirtualSRTNode{entry: entry}
+			stable := fs.StableAttr{
+				Mode: syscall.S_IFREG,
+				Ino:  ino,
+				Gen:  1,
+			}
+			child := r.NewInode(ctx, node, stable)
+			out.Mode = syscall.S_IFREG | 0644
+			out.Size = uint64(len(bazarrDummySRT))
+			out.Ino = ino
+			return child, 0
+		}
+	}
+
 	// Fallback for directories or other files
 	st := syscall.Stat_t{}
 	if err := syscall.Lstat(fullPath, &st); err != nil {
@@ -543,7 +561,7 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	if (st.Mode & syscall.S_IFMT) == syscall.S_IFDIR {
-		node := &VirtualDirNode{physicalPath: fullPath}
+		node := &VirtualDirNode{physicalPath: fullPath, subtitleProvider: r.subtitleProvider}
 		dirIno := getDirInodeFromMap(fullPath)
 		stable := fs.StableAttr{
 			Mode: syscall.S_IFDIR,
@@ -631,6 +649,10 @@ func (r *VirtualMkvRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		})
 	}
 
+	if virtualSRTs := bazarrVirtualSRTEntries(r.sourcePath, len(result), r.subtitleProvider); len(virtualSRTs) > 0 {
+		result = append(result, virtualSRTs...)
+	}
+
 	globalDirCache.Put(r.sourcePath, result)
 
 	return &nfsDirStream{entries: result}, 0
@@ -671,7 +693,8 @@ func (r *VirtualMkvRoot) Statfs(ctx context.Context, out *fuse.StatfsOut) syscal
 // VirtualDirNode - nodo per directory (movies, tv) con file .mkv virtuali
 type VirtualDirNode struct {
 	fs.Inode
-	physicalPath string // Path fisico della directory (es. /mnt/torrserver/movies)
+	physicalPath     string // Path fisico della directory (es. /mnt/torrserver/movies)
+	subtitleProvider subprovider.SubtitleProvider
 }
 
 // Compile-time interface checks for VirtualDirNode
@@ -737,6 +760,10 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		}
 	}
 
+	if virtualSRTs := bazarrVirtualSRTEntries(d.physicalPath, len(result), d.subtitleProvider); len(virtualSRTs) > 0 {
+		result = append(result, virtualSRTs...)
+	}
+
 	globalDirCache.Put(d.physicalPath, result)
 
 	return &nfsDirStream{entries: result}, 0
@@ -779,6 +806,20 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			out.Ino = ino
 			return child, 0
 		}
+		if entry, ok := lookupBazarrVirtualSRT(d.physicalPath, name, d.subtitleProvider); ok {
+			ino := getFileInodeFromMap(fullPath)
+			node := &VirtualSRTNode{entry: entry}
+			stable := fs.StableAttr{
+				Mode: syscall.S_IFREG,
+				Ino:  ino,
+				Gen:  1,
+			}
+			child := d.NewInode(ctx, node, stable)
+			out.Mode = syscall.S_IFREG | 0644
+			out.Size = uint64(len(bazarrDummySRT))
+			out.Ino = ino
+			return child, 0
+		}
 		// .srt não existe em disco — não é erro: ainda será gerado
 	}
 
@@ -789,7 +830,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	if (st.Mode & syscall.S_IFMT) == syscall.S_IFDIR {
-		node := &VirtualDirNode{physicalPath: fullPath}
+		node := &VirtualDirNode{physicalPath: fullPath, subtitleProvider: d.subtitleProvider}
 		dirIno := getDirInodeFromMap(fullPath)
 		stable := fs.StableAttr{
 			Mode: syscall.S_IFDIR,
@@ -3136,11 +3177,13 @@ func getOrReadMeta(path string) (*vfs.Metadata, error) {
 			}
 
 			m = &vfs.Metadata{
-				URL:    fileMeta.URL,
-				Size:   fileMeta.Size,
-				Mtime:  fileMeta.Mtime,
-				Path:   fileMeta.Path,
-				ImdbID: fileMeta.ImdbID,
+				URL:             fileMeta.URL,
+				Size:            fileMeta.Size,
+				Mtime:           fileMeta.Mtime,
+				Path:            fileMeta.Path,
+				ImdbID:          fileMeta.ImdbID,
+				RadarrID:        fileMeta.RadarrID,
+				SonarrEpisodeID: fileMeta.SonarrEpisodeID,
 			}
 
 			metaCache.Put(path, m, approximateMetadataSize(m))
@@ -4243,6 +4286,7 @@ func main() {
 	}
 
 	globalConfig.Store(&cfg)
+	bazarrProviderRuntime := newRuntimeSubtitleProvider(gc().Bazarr)
 	subprovider.SetAppVersion(AppVersion)
 	subprovider.SetLogger(logger)
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
@@ -4558,7 +4602,6 @@ func main() {
 		}
 	}
 
-
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
 	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -4698,6 +4741,8 @@ func main() {
 			oldSubAPIKey := gc().Subtitle.APIKey
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
+			bazarrProviderRuntime.Set(newBazarrSubtitleProvider(gc().Bazarr))
+			clearBazarrVirtualSRTCache()
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 
 			newEnabled := gc().BlockListEnabled
@@ -4787,6 +4832,8 @@ func main() {
 			w.WriteHeader(200)
 		}
 	})
+
+	registerBazarrConfigAPI(bazarrProviderRuntime)
 
 	http.HandleFunc("/api/prowlarr/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -5136,7 +5183,7 @@ func main() {
 	}()
 
 	// Crea root node virtuale
-	rootData := &VirtualMkvRoot{sourcePath: source}
+	rootData := &VirtualMkvRoot{sourcePath: source, subtitleProvider: bazarrProviderRuntime}
 
 	// Enable attribute caching from config
 	attrTimeout := time.Duration(gc().AttrTimeoutSeconds * float64(time.Second))

@@ -1,6 +1,7 @@
 package subprovider
 
 import (
+	"context"
 	"sync"
 )
 
@@ -26,13 +27,30 @@ type Subtitle struct {
 	Score        int         // 0–100, higher = better match
 }
 
+// SubtitleCandidate is the lightweight candidate shape used by virtual .srt stubs.
+type SubtitleCandidate struct {
+	ID           string
+	Title        string
+	ReleaseGroup string
+	Score        int
+	Language     string
+	DownloadURL  string
+}
+
+// SubtitleProvider is the runtime interface used by FUSE virtual subtitle stubs.
+type SubtitleProvider interface {
+	Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error)
+	Download(ctx context.Context, subtitleID string, destPath string) error
+	IsEnabled() bool
+}
+
 // Result is what the Engine returns through its channel after searching + downloading.
 type Result struct {
-	Content  []byte      // raw .srt bytes
-	Filename string      // full sidecar filename
-	Provider string      // "subdb" or "opensubtitles"
+	Content  []byte // raw .srt bytes
+	Filename string // full sidecar filename
+	Provider string // "subdb" or "opensubtitles"
 	Language string
-	Error    error       // non-nil if no subtitle was found or download failed
+	Error    error // non-nil if no subtitle was found or download failed
 }
 
 // Provider is the contract every subtitle source must implement.

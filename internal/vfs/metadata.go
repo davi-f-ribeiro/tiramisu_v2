@@ -16,15 +16,19 @@ type Metadata struct {
 	URL, Path, ImdbID string
 	Size              int64
 	Mtime             time.Time
+	RadarrID          int
+	SonarrEpisodeID   int
 }
 
 // FileMetadata represents metadata extracted from a virtual .mkv file
 type FileMetadata struct {
-	URL    string    // Stream URL from line 1
-	Size   int64     // File size in bytes from line 2
-	Mtime  time.Time // File modification time
-	Path   string    // Original file path
-	ImdbID string    // IMDB ID from line 4 (optional)
+	URL             string    // Stream URL from line 1
+	Size            int64     // File size in bytes from line 2
+	Mtime           time.Time // File modification time
+	Path            string    // Original file path
+	ImdbID          string    // IMDB ID from line 4 (optional)
+	RadarrID        int       // Bazarr/Radarr movie ID (optional)
+	SonarrEpisodeID int       // Bazarr/Sonarr episode ID (optional)
 }
 
 // Validation constants
@@ -44,17 +48,21 @@ var (
 
 // MkvJSON is the internal JSON representation of a .mkv file.
 type MkvJSON struct {
-	URL       string `json:"url"`
-	Size      int64  `json:"size"`
-	Magnet    string `json:"magnet"`
-	Imdb      string `json:"imdb,omitempty"`
-	TMDBID    int    `json:"tmdb_id,omitempty"`
-	TVDBID    int    `json:"tvdb_id,omitempty"`
-	MediaType string `json:"media_type,omitempty"` // "movie" ou "episode"
-	Title     string `json:"title,omitempty"`
-	Year      int    `json:"year,omitempty"`
-	Season    int    `json:"season,omitempty"`
-	Episode   int    `json:"episode,omitempty"`
+	URL                  string `json:"url"`
+	Size                 int64  `json:"size"`
+	Magnet               string `json:"magnet"`
+	Imdb                 string `json:"imdb,omitempty"`
+	TMDBID               int    `json:"tmdb_id,omitempty"`
+	TVDBID               int    `json:"tvdb_id,omitempty"`
+	RadarrID             int    `json:"radarr_id,omitempty"`
+	RadarrIDCamel        int    `json:"radarrId,omitempty"`
+	SonarrEpisodeID      int    `json:"sonarr_episode_id,omitempty"`
+	SonarrEpisodeIDCamel int    `json:"sonarrEpisodeId,omitempty"`
+	MediaType            string `json:"media_type,omitempty"` // "movie" ou "episode"
+	Title                string `json:"title,omitempty"`
+	Year                 int    `json:"year,omitempty"`
+	Season               int    `json:"season,omitempty"`
+	Episode              int    `json:"episode,omitempty"`
 }
 
 // ReadMetadataFromFile reads metadata from a virtual .mkv file.
@@ -105,12 +113,23 @@ func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetada
 		imdbID = reID.FindString(content)
 	}
 
+	radarrID := j.RadarrID
+	if radarrID == 0 {
+		radarrID = j.RadarrIDCamel
+	}
+	sonarrEpisodeID := j.SonarrEpisodeID
+	if sonarrEpisodeID == 0 {
+		sonarrEpisodeID = j.SonarrEpisodeIDCamel
+	}
+
 	return &FileMetadata{
-		URL:    url,
-		Size:   j.Size,
-		Mtime:  info.ModTime(),
-		Path:   path,
-		ImdbID: imdbID,
+		URL:             url,
+		Size:            j.Size,
+		Mtime:           info.ModTime(),
+		Path:            path,
+		ImdbID:          imdbID,
+		RadarrID:        radarrID,
+		SonarrEpisodeID: sonarrEpisodeID,
 	}, nil
 }
 

@@ -46,6 +46,13 @@
     "library_id": 0
   },
   "tmdb_api_key": "",
+  "bazarr": {
+    "enabled": false,
+    "url": "http://127.0.0.1:6789",
+    "api_key": "",
+    "timeout_seconds": 30,
+    "max_results": 5
+  },
   "subtitle": {
     "enabled": false,
     "api_key": "",
