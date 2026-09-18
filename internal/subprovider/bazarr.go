@@ -39,61 +39,45 @@ func NewBazarrClient(cfg BazarrConfig) *BazarrClient {
 		cfg.MaxResults = 5
 	}
 	cfg.URL = strings.TrimRight(strings.TrimSpace(cfg.URL), "/")
-	return &BazarrClient{
-		cfg:  cfg,
-		http: &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
-	}
+	return &BazarrClient{cfg: cfg, http: &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second}}
 }
 
-func (c *BazarrClient) IsEnabled() bool {
-	return c != nil && c.cfg.Enabled && c.cfg.URL != ""
-}
+func (c *BazarrClient) IsEnabled() bool { return c != nil && c.cfg.Enabled && c.cfg.URL != "" }
 
-// Search implements SubtitleProvider. mediaID is interpreted as a Radarr ID first,
-// then as a Sonarr episode ID fallback because the current virtual .mkv metadata
-// carries only one numeric media identifier.
+// Search implements SubtitleProvider. mediaID is a Bazarr/Radarr movie id or a
+// Bazarr/Sonarr episode id. If mediaID is missing and title contains an IMDb id,
+// the client resolves the movie id from /api/movies before searching providers.
 func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error) {
 	if !c.IsEnabled() {
 		return nil, nil
 	}
-
-	paths := make([]string, 0, 5)
-	if mediaID > 0 {
-		movieQ := url.Values{}
-		movieQ.Set("radarrId", strconv.Itoa(mediaID))
-		movieQ.Set("language", language)
-		paths = append(paths,
-			"/api/subtitles?"+movieQ.Encode(),
-			"/api/providers/movies?radarrid="+url.QueryEscape(strconv.Itoa(mediaID)),
-		)
-
-		episodeQ := url.Values{}
-		episodeQ.Set("episodeId", strconv.Itoa(mediaID))
-		episodeQ.Set("language", language)
-		paths = append(paths,
-			"/api/subtitles?"+episodeQ.Encode(),
-			"/api/providers/episodes?episodeid="+url.QueryEscape(strconv.Itoa(mediaID)),
-		)
-	}
-	if title != "" {
-		q := url.Values{}
-		q.Set("query", title)
-		q.Set("language", language)
-		paths = append(paths, "/api/subtitles?"+q.Encode())
-	}
-
 	var lastErr error
-	for _, path := range paths {
-		subs, err := c.getSubtitles(ctx, path)
+	if mediaID > 0 {
+		for _, path := range []string{
+			"/api/providers/movies?radarrid=" + url.QueryEscape(strconv.Itoa(mediaID)),
+			"/api/providers/episodes?episodeid=" + url.QueryEscape(strconv.Itoa(mediaID)),
+		} {
+			subs, err := c.getProviderSubtitles(ctx, path, language)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if len(subs) > 0 {
+				return limitCandidates(subs, c.cfg.MaxResults), nil
+			}
+		}
+	}
+	if imdbID := normalizeIMDbID(title); imdbID != "" {
+		radarrID, err := c.resolveMovieRadarrID(ctx, imdbID)
 		if err != nil {
 			lastErr = err
-			continue
-		}
-		if len(subs) > c.cfg.MaxResults {
-			subs = subs[:c.cfg.MaxResults]
-		}
-		if len(subs) > 0 {
-			return subs, nil
+		} else if radarrID > 0 {
+			subs, err := c.getProviderSubtitles(ctx, "/api/providers/movies?radarrid="+url.QueryEscape(strconv.Itoa(radarrID)), language)
+			if err != nil {
+				lastErr = err
+			} else if len(subs) > 0 {
+				return limitCandidates(subs, c.cfg.MaxResults), nil
+			}
 		}
 	}
 	if lastErr != nil {
@@ -102,15 +86,9 @@ func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, la
 	return nil, nil
 }
 
-// SearchByIMDb searches cached/available subtitles by IMDb ID and language.
+// SearchByIMDb resolves the movie in Bazarr and searches configured providers.
 func (c *BazarrClient) SearchByIMDb(ctx context.Context, imdbID, language string) ([]SubtitleCandidate, error) {
-	if !c.IsEnabled() || imdbID == "" {
-		return nil, nil
-	}
-	q := url.Values{}
-	q.Set("imdbId", imdbID)
-	q.Set("language", language)
-	return c.getSubtitles(ctx, "/api/subtitles?"+q.Encode())
+	return c.Search(ctx, 0, imdbID, language)
 }
 
 func (c *BazarrClient) Download(ctx context.Context, subtitleID string, destPath string) error {
@@ -123,10 +101,7 @@ func (c *BazarrClient) Download(ctx context.Context, subtitleID string, destPath
 	paths := []string{subtitleID}
 	if !strings.HasPrefix(subtitleID, "http://") && !strings.HasPrefix(subtitleID, "https://") && !strings.HasPrefix(subtitleID, "/") {
 		escaped := url.PathEscape(subtitleID)
-		paths = []string{
-			"/api/subtitles/" + escaped + "/download",
-			"/api/subtitles/download/" + escaped,
-		}
+		paths = []string{"/api/subtitles/" + escaped + "/download", "/api/subtitles/download/" + escaped}
 	}
 	var lastErr error
 	for _, p := range paths {
@@ -142,12 +117,35 @@ func (c *BazarrClient) Download(ctx context.Context, subtitleID string, destPath
 	return fmt.Errorf("empty subtitle download for %q", subtitleID)
 }
 
-func (c *BazarrClient) getSubtitles(ctx context.Context, path string) ([]SubtitleCandidate, error) {
+func (c *BazarrClient) getProviderSubtitles(ctx context.Context, path, language string) ([]SubtitleCandidate, error) {
 	body, err := c.getBytes(ctx, path, true)
 	if err != nil {
 		return nil, err
 	}
-	return parseBazarrSubtitles(body)
+	subs, err := parseBazarrSubtitles(body)
+	if err != nil {
+		return nil, err
+	}
+	return filterLanguage(subs, language), nil
+}
+
+func (c *BazarrClient) resolveMovieRadarrID(ctx context.Context, imdbID string) (int, error) {
+	body, err := c.getBytes(ctx, "/api/movies", true)
+	if err != nil {
+		return 0, err
+	}
+	var raw any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return 0, err
+	}
+	for _, item := range unwrapBazarrList(raw) {
+		m, ok := item.(map[string]any)
+		if !ok || normalizeIMDbID(firstString(m, "imdbId", "imdb_id", "imdb")) != imdbID {
+			continue
+		}
+		return firstInt(m, "radarrId", "radarr_id", "id", "movieId", "movie_id"), nil
+	}
+	return 0, nil
 }
 
 func (c *BazarrClient) getBytes(ctx context.Context, path string, requireJSON bool) ([]byte, error) {
@@ -196,21 +194,13 @@ func parseBazarrSubtitles(body []byte) ([]SubtitleCandidate, error) {
 		if !ok {
 			continue
 		}
-		sub := SubtitleCandidate{
-			ID:           firstString(m, "id", "subtitleId", "subtitle_id", "providerId"),
-			Title:        firstString(m, "movieName", "movie_name", "seriesTitle", "title", "name"),
-			ReleaseGroup: firstString(m, "releaseGroup", "release_group", "release", "provider"),
-			Language:     firstString(m, "language", "languageCode", "language_code"),
-			DownloadURL:  firstString(m, "downloadUrl", "download_url", "url"),
-			Score:        firstInt(m, "score", "matchScore", "match_score"),
-		}
+		sub := SubtitleCandidate{ID: firstString(m, "id", "subtitleId", "subtitle_id", "providerId", "provider_id"), Title: firstString(m, "movieName", "movie_name", "seriesTitle", "title", "name"), ReleaseGroup: firstString(m, "releaseGroup", "release_group", "release", "provider", "provider_name"), Language: firstLanguage(m), DownloadURL: firstString(m, "downloadUrl", "download_url", "url"), Score: firstInt(m, "score", "matchScore", "match_score")}
 		if sub.ID == "" && sub.DownloadURL != "" {
 			sub.ID = sub.DownloadURL
 		}
-		if sub.ID == "" {
-			continue
+		if sub.ID != "" {
+			out = append(out, sub)
 		}
-		out = append(out, sub)
 	}
 	return out, nil
 }
@@ -220,7 +210,7 @@ func unwrapBazarrList(raw any) []any {
 	case []any:
 		return v
 	case map[string]any:
-		for _, key := range []string{"data", "results", "subtitles", "movies", "episodes"} {
+		for _, key := range []string{"data", "results", "subtitles", "movies", "episodes", "providers"} {
 			if arr, ok := v[key].([]any); ok {
 				return arr
 			}
@@ -241,6 +231,25 @@ func firstString(m map[string]any, keys ...string) string {
 			return v
 		case float64:
 			return strconv.FormatInt(int64(v), 10)
+		case map[string]any:
+			if s := firstString(v, "code", "name", "language"); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func firstLanguage(m map[string]any) string {
+	if s := firstString(m, "language", "languageCode", "language_code", "languageName", "language_name"); s != "" {
+		return s
+	}
+	if v, ok := m["languages"].([]any); ok && len(v) > 0 {
+		if mm, ok := v[0].(map[string]any); ok {
+			return firstString(mm, "code", "name", "language")
+		}
+		if s, ok := v[0].(string); ok {
+			return s
 		}
 	}
 	return ""
@@ -258,6 +267,44 @@ func firstInt(m map[string]any, keys ...string) int {
 		}
 	}
 	return 0
+}
+
+func filterLanguage(subs []SubtitleCandidate, language string) []SubtitleCandidate {
+	want := normalizeLang(language)
+	out := subs[:0]
+	for _, sub := range subs {
+		if want == "" || normalizeLang(sub.Language) == want || normalizeLang(sub.Language) == "por" {
+			out = append(out, sub)
+		}
+	}
+	return out
+}
+
+func normalizeLang(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "_", "-")
+	if s == "pt-br" || s == "ptbr" || s == "pb" || s == "portuguese-br" || s == "brazilian portuguese" {
+		return "por"
+	}
+	if s == "por" || s == "pt" || strings.Contains(s, "portuguese") {
+		return "por"
+	}
+	return s
+}
+
+func normalizeIMDbID(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if strings.HasPrefix(s, "tt") {
+		return s
+	}
+	return ""
+}
+
+func limitCandidates(subs []SubtitleCandidate, n int) []SubtitleCandidate {
+	if n > 0 && len(subs) > n {
+		return subs[:n]
+	}
+	return subs
 }
 
 func bazarrMin(a, b int) int {
