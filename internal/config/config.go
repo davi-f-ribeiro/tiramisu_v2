@@ -378,7 +378,7 @@ func LoadConfig() Config {
 		BlockListEnabled: false,
 		Bazarr: BazarrConfig{
 			Enabled:        false,
-			URL:            "http://127.0.0.1:6789",
+			URL:            "http://127.0.0.1:6767",
 			TimeoutSeconds: 30,
 			MaxResults:     5,
 		},

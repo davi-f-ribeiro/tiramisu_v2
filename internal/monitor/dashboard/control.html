@@ -1483,7 +1483,7 @@
 
                         <div class="form-group">
                             <label>Bazarr URL</label>
-                            <input type="text" id="bazarr_url" form="tiramisu-form" placeholder="http://127.0.0.1:6789">
+                            <input type="text" id="bazarr_url" form="tiramisu-form" placeholder="http://127.0.0.1:6767">
                         </div>
 
                         <div class="form-group">
@@ -2941,7 +2941,7 @@
                 const res = await fetch('/api/v1/config/bazarr');
                 const cfg = await res.json();
                 document.getElementById('bazarr_enabled').checked = cfg.enabled || false;
-                document.getElementById('bazarr_url').value = cfg.url || 'http://127.0.0.1:6789';
+                document.getElementById('bazarr_url').value = cfg.url || 'http://127.0.0.1:6767';
                 document.getElementById('bazarr_timeout_seconds').value = cfg.timeout_seconds || 30;
                 document.getElementById('bazarr_max_results').value = cfg.max_results || 5;
                 document.getElementById('bazarr_api_key').value = '';
