@@ -1,4 +1,4 @@
-package main
+package bazarrvfs
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -18,18 +19,26 @@ import (
 	"tiramisu/internal/vfs"
 )
 
-const bazarrVirtualLanguage = "pt-BR"
+const VirtualLanguage = "pt-BR"
 
-var bazarrDummySRT = []byte("1\n00:00:00,000 --> 00:00:01,000\nLegenda sendo preparada pelo Tiramisu.\n\n")
-var bazarrVirtualSRTCache sync.Map // full virtual path -> *bazarrVirtualSubtitle
+var DummySRT = []byte("1\n00:00:00,000 --> 00:00:01,000\nLegenda sendo preparada pelo Tiramisu.\n\n")
+var virtualSRTCache sync.Map // full virtual path -> *Subtitle
 
-type bazarrVirtualSubtitle struct {
+type Options struct {
+	Provider     subprovider.SubtitleProvider
+	InodeForPath func(string) uint64
+	Go           func(func())
+	Logf         func(string, ...any)
+}
+
+type Subtitle struct {
 	Name      string
 	Dir       string
 	VideoPath string
 	Candidate subprovider.SubtitleCandidate
 	Provider  subprovider.SubtitleProvider
 	DestPath  string
+	goFunc    func(func())
 
 	once    sync.Once
 	done    chan struct{}
@@ -38,38 +47,43 @@ type bazarrVirtualSubtitle struct {
 	err     error
 }
 
-type VirtualSRTNode struct {
+type Node struct {
 	fs.Inode
-	entry *bazarrVirtualSubtitle
+	entry        *Subtitle
+	inodeForPath func(string) uint64
 }
 
-var _ fs.NodeGetattrer = (*VirtualSRTNode)(nil)
-var _ fs.NodeOpener = (*VirtualSRTNode)(nil)
+var _ fs.NodeGetattrer = (*Node)(nil)
+var _ fs.NodeOpener = (*Node)(nil)
 
-func (n *VirtualSRTNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func NewNode(entry *Subtitle, opts Options) *Node {
+	return &Node{entry: entry, inodeForPath: opts.InodeForPath}
+}
+
+func (n *Node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Mode = syscall.S_IFREG | 0644
-	out.Size = uint64(len(bazarrDummySRT))
-	if n.entry != nil {
-		out.Ino = getFileInodeFromMap(filepath.Join(n.entry.Dir, n.entry.Name))
+	out.Size = uint64(len(DummySRT))
+	if n.entry != nil && n.inodeForPath != nil {
+		out.Ino = n.inodeForPath(filepath.Join(n.entry.Dir, n.entry.Name))
 	}
 	return 0
 }
 
-func (n *VirtualSRTNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+func (n *Node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if n.entry == nil {
 		return nil, 0, syscall.ENOENT
 	}
 	n.entry.startDownload()
-	return &VirtualSRTHandle{entry: n.entry}, 0, 0
+	return &Handle{entry: n.entry}, 0, 0
 }
 
-type VirtualSRTHandle struct {
-	entry *bazarrVirtualSubtitle
+type Handle struct {
+	entry *Subtitle
 }
 
-var _ fs.FileReader = (*VirtualSRTHandle)(nil)
+var _ fs.FileReader = (*Handle)(nil)
 
-func (h *VirtualSRTHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (h *Handle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	if h.entry == nil {
 		return nil, syscall.ENOENT
 	}
@@ -95,12 +109,16 @@ func (h *VirtualSRTHandle) Read(ctx context.Context, dest []byte, off int64) (fu
 	return fuse.ReadResultData(data[off:end]), 0
 }
 
-func (v *bazarrVirtualSubtitle) startDownload() {
+func (v *Subtitle) startDownload() {
 	v.once.Do(func() {
 		if v.done == nil {
 			v.done = make(chan struct{})
 		}
-		safeGo(func() {
+		run := v.goFunc
+		if run == nil {
+			run = func(f func()) { go f() }
+		}
+		run(func() {
 			defer close(v.done)
 			if v.Provider == nil || !v.Provider.IsEnabled() {
 				return
@@ -131,30 +149,31 @@ func (v *bazarrVirtualSubtitle) startDownload() {
 	})
 }
 
-func (v *bazarrVirtualSubtitle) bytesOrDummy() []byte {
+func (v *Subtitle) bytesOrDummy() []byte {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if len(v.content) > 0 {
 		return v.content
 	}
-	return bazarrDummySRT
+	return DummySRT
 }
 
-func clearBazarrVirtualSRTCache() {
-	bazarrVirtualSRTCache.Range(func(key, value any) bool {
-		bazarrVirtualSRTCache.Delete(key)
+func ClearCache() {
+	virtualSRTCache.Range(func(key, value any) bool {
+		virtualSRTCache.Delete(key)
 		return true
 	})
 }
 
-func bazarrVirtualSRTEntries(dir string, startOffset int, provider subprovider.SubtitleProvider) []fuse.DirEntry {
+func Entries(dir string, startOffset int, opts Options) []fuse.DirEntry {
+	provider := opts.Provider
 	if provider == nil || !provider.IsEnabled() {
 		return nil
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		logger.Printf("[BAZARR] readdir source failed for %s: %v", dir, err)
+		logf(opts, "[BAZARR] readdir source failed for %s: %v", dir, err)
 		return nil
 	}
 
@@ -169,32 +188,37 @@ func bazarrVirtualSRTEntries(dir string, startOffset int, provider subprovider.S
 		if err != nil || (meta.ImdbID == "" && meta.RadarrID == 0 && meta.SonarrEpisodeID == 0) {
 			continue
 		}
-		subs, err := searchSubtitleProviderForMetadata(provider, meta)
+		subs, err := searchProviderForMetadata(provider, meta)
 		if err != nil {
-			logger.Printf("[BAZARR] search failed for %s imdb=%s: %v", e.Name(), meta.ImdbID, err)
+			logf(opts, "[BAZARR] search failed for %s imdb=%s: %v", e.Name(), meta.ImdbID, err)
 			continue
 		}
 		for _, sub := range subs {
-			name := bazarrVirtualSRTName(e.Name(), sub)
+			name := VirtualSRTName(e.Name(), sub)
 			if name == "" || seen[name] {
 				continue
 			}
 			seen[name] = true
 			virtPath := filepath.Join(dir, name)
-			entry := &bazarrVirtualSubtitle{
+			entry := &Subtitle{
 				Name:      name,
 				Dir:       dir,
 				VideoPath: videoPath,
 				Candidate: sub,
 				Provider:  provider,
-				DestPath:  bazarrVirtualSRTDestPath(virtPath),
+				DestPath:  DestPath(virtPath),
 				done:      make(chan struct{}),
+				goFunc:    opts.Go,
 			}
-			bazarrVirtualSRTCache.Store(virtPath, entry)
+			virtualSRTCache.Store(virtPath, entry)
+			ino := uint64(0)
+			if opts.InodeForPath != nil {
+				ino = opts.InodeForPath(virtPath)
+			}
 			out = append(out, fuse.DirEntry{
 				Name: name,
 				Mode: syscall.S_IFREG,
-				Ino:  getFileInodeFromMap(virtPath),
+				Ino:  ino,
 				Off:  uint64(startOffset + len(out) + 1),
 			})
 		}
@@ -202,7 +226,7 @@ func bazarrVirtualSRTEntries(dir string, startOffset int, provider subprovider.S
 	return out
 }
 
-func searchSubtitleProviderForMetadata(provider subprovider.SubtitleProvider, meta *vfs.FileMetadata) ([]subprovider.SubtitleCandidate, error) {
+func searchProviderForMetadata(provider subprovider.SubtitleProvider, meta *vfs.FileMetadata) ([]subprovider.SubtitleCandidate, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	mediaID := meta.RadarrID
@@ -213,18 +237,18 @@ func searchSubtitleProviderForMetadata(provider subprovider.SubtitleProvider, me
 	if title == "" {
 		title = filepath.Base(meta.Path)
 	}
-	return provider.Search(ctx, mediaID, title, bazarrVirtualLanguage)
+	return provider.Search(ctx, mediaID, title, VirtualLanguage)
 }
 
-func lookupBazarrVirtualSRT(dir, name string, provider subprovider.SubtitleProvider) (*bazarrVirtualSubtitle, bool) {
-	if val, ok := bazarrVirtualSRTCache.Load(filepath.Join(dir, name)); ok {
-		entry, ok := val.(*bazarrVirtualSubtitle)
+func Lookup(dir, name string, opts Options) (*Subtitle, bool) {
+	if val, ok := virtualSRTCache.Load(filepath.Join(dir, name)); ok {
+		entry, ok := val.(*Subtitle)
 		return entry, ok
 	}
-	for _, e := range bazarrVirtualSRTEntries(dir, 0, provider) {
+	for _, e := range Entries(dir, 0, opts) {
 		if e.Name == name {
-			if val, ok := bazarrVirtualSRTCache.Load(filepath.Join(dir, name)); ok {
-				entry, ok := val.(*bazarrVirtualSubtitle)
+			if val, ok := virtualSRTCache.Load(filepath.Join(dir, name)); ok {
+				entry, ok := val.(*Subtitle)
 				return entry, ok
 			}
 		}
@@ -232,7 +256,7 @@ func lookupBazarrVirtualSRT(dir, name string, provider subprovider.SubtitleProvi
 	return nil, false
 }
 
-func bazarrVirtualSRTName(videoName string, sub subprovider.SubtitleCandidate) string {
+func VirtualSRTName(videoName string, sub subprovider.SubtitleCandidate) string {
 	base := strings.TrimSuffix(videoName, filepath.Ext(videoName))
 	if sub.Title != "" {
 		base = sub.Title
@@ -248,14 +272,12 @@ func bazarrVirtualSRTName(videoName string, sub subprovider.SubtitleCandidate) s
 	if score > 100 {
 		score = 100
 	}
-	return fmt.Sprintf("%s.%s-%d%%.%s.srt", safeSRTName(base), safeSRTName(release), score, bazarrVirtualLanguage)
+	return fmt.Sprintf("%s.%s-%d%%.%s.srt", safeSRTName(base), safeSRTName(release), score, VirtualLanguage)
 }
 
-func bazarrVirtualSRTDestPath(virtPath string) string {
-	return filepath.Join(os.TempDir(), "tiramisu-bazarr-srt", fmt.Sprintf("%x.srt", xxhashString(virtPath)))
+func DestPath(virtPath string) string {
+	return filepath.Join(os.TempDir(), "tiramisu-bazarr-srt", fmt.Sprintf("%x.srt", xxhash.Sum64String(virtPath)))
 }
-
-func xxhashString(s string) uint64 { return hashFilenameToInode(s) }
 
 var unsafeSRTNameChars = regexp.MustCompile(`[\\/:*?"<>|]+`)
 
@@ -267,4 +289,10 @@ func safeSRTName(s string) string {
 	s = unsafeSRTNameChars.ReplaceAllString(s, "_")
 	s = strings.ReplaceAll(s, " ", ".")
 	return s
+}
+
+func logf(opts Options, format string, args ...any) {
+	if opts.Logf != nil {
+		opts.Logf(format, args...)
+	}
 }

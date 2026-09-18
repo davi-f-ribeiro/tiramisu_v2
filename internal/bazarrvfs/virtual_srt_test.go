@@ -1,4 +1,4 @@
-package main
+package bazarrvfs
 
 import (
 	"context"
@@ -28,7 +28,8 @@ func (m *mockSubtitleProvider) Download(ctx context.Context, subtitleID string, 
 
 func (m *mockSubtitleProvider) IsEnabled() bool { return m.enabled }
 
-func TestBazarrVirtualSRTEntriesSynthesizesSubtitleNode(t *testing.T) {
+func TestEntriesSynthesizesSubtitleNode(t *testing.T) {
+	ClearCache()
 	dir := t.TempDir()
 	mkvPath := filepath.Join(dir, "Movie.Title.2024-GROUP.mkv")
 	metadata := `{"url":"http://example.invalid/movie.mkv","size":104857600,"imdb":"tt1234567","radarr_id":42}`
@@ -46,8 +47,9 @@ func TestBazarrVirtualSRTEntriesSynthesizesSubtitleNode(t *testing.T) {
 			Language:     "pt-BR",
 		}},
 	}
+	opts := Options{Provider: provider, InodeForPath: func(string) uint64 { return 123 }}
 
-	entries := bazarrVirtualSRTEntries(dir, 0, provider)
+	entries := Entries(dir, 0, opts)
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 virtual subtitle entry, got %d", len(entries))
 	}
@@ -59,21 +61,21 @@ func TestBazarrVirtualSRTEntriesSynthesizesSubtitleNode(t *testing.T) {
 		t.Fatalf("expected provider search to receive radarr id 42, got %d", provider.searchMedia)
 	}
 
-	entry, ok := lookupBazarrVirtualSRT(dir, wantName, provider)
+	entry, ok := Lookup(dir, wantName, opts)
 	if !ok || entry == nil {
 		t.Fatalf("expected lookup to resolve synthesized subtitle")
 	}
 }
 
-func TestVirtualSRTHandleReturnsDummyBeforeDownloadCompletes(t *testing.T) {
-	entry := &bazarrVirtualSubtitle{
+func TestHandleReturnsDummyBeforeDownloadCompletes(t *testing.T) {
+	entry := &Subtitle{
 		Name:      "dummy.srt",
 		Dir:       t.TempDir(),
 		Candidate: subprovider.SubtitleCandidate{ID: "sub-1"},
 		Provider:  &mockSubtitleProvider{enabled: false},
 		done:      make(chan struct{}),
 	}
-	h := &VirtualSRTHandle{entry: entry}
+	h := &Handle{entry: entry}
 	buf := make([]byte, 1024)
 	res, errno := h.Read(context.Background(), buf, 0)
 	if errno != 0 {

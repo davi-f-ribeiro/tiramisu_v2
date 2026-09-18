@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -31,6 +30,8 @@ import (
 	"time"
 	"tiramisu/internal/ai"
 	"tiramisu/internal/arr"
+	"tiramisu/internal/bazarr"
+	"tiramisu/internal/bazarrvfs"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
 	tmdbpkg "tiramisu/internal/catalog/tmdb"
@@ -538,9 +539,9 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	if strings.HasSuffix(name, ".srt") {
-		if entry, ok := lookupBazarrVirtualSRT(r.sourcePath, name, r.subtitleProvider); ok {
+		if entry, ok := bazarrvfs.Lookup(r.sourcePath, name, bazarrVFSOptions(r.subtitleProvider)); ok {
 			ino := getFileInodeFromMap(fullPath)
-			node := &VirtualSRTNode{entry: entry}
+			node := bazarrvfs.NewNode(entry, bazarrVFSOptions(r.subtitleProvider))
 			stable := fs.StableAttr{
 				Mode: syscall.S_IFREG,
 				Ino:  ino,
@@ -548,7 +549,7 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 			}
 			child := r.NewInode(ctx, node, stable)
 			out.Mode = syscall.S_IFREG | 0644
-			out.Size = uint64(len(bazarrDummySRT))
+			out.Size = uint64(len(bazarrvfs.DummySRT))
 			out.Ino = ino
 			return child, 0
 		}
@@ -649,7 +650,7 @@ func (r *VirtualMkvRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		})
 	}
 
-	if virtualSRTs := bazarrVirtualSRTEntries(r.sourcePath, len(result), r.subtitleProvider); len(virtualSRTs) > 0 {
+	if virtualSRTs := bazarrvfs.Entries(r.sourcePath, len(result), bazarrVFSOptions(r.subtitleProvider)); len(virtualSRTs) > 0 {
 		result = append(result, virtualSRTs...)
 	}
 
@@ -695,6 +696,15 @@ type VirtualDirNode struct {
 	fs.Inode
 	physicalPath     string // Path fisico della directory (es. /mnt/torrserver/movies)
 	subtitleProvider subprovider.SubtitleProvider
+}
+
+func bazarrVFSOptions(provider subprovider.SubtitleProvider) bazarrvfs.Options {
+	return bazarrvfs.Options{
+		Provider:     provider,
+		InodeForPath: getFileInodeFromMap,
+		Go:           safeGo,
+		Logf:         logger.Printf,
+	}
 }
 
 // Compile-time interface checks for VirtualDirNode
@@ -760,7 +770,7 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		}
 	}
 
-	if virtualSRTs := bazarrVirtualSRTEntries(d.physicalPath, len(result), d.subtitleProvider); len(virtualSRTs) > 0 {
+	if virtualSRTs := bazarrvfs.Entries(d.physicalPath, len(result), bazarrVFSOptions(d.subtitleProvider)); len(virtualSRTs) > 0 {
 		result = append(result, virtualSRTs...)
 	}
 
@@ -806,9 +816,9 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			out.Ino = ino
 			return child, 0
 		}
-		if entry, ok := lookupBazarrVirtualSRT(d.physicalPath, name, d.subtitleProvider); ok {
+		if entry, ok := bazarrvfs.Lookup(d.physicalPath, name, bazarrVFSOptions(d.subtitleProvider)); ok {
 			ino := getFileInodeFromMap(fullPath)
-			node := &VirtualSRTNode{entry: entry}
+			node := bazarrvfs.NewNode(entry, bazarrVFSOptions(d.subtitleProvider))
 			stable := fs.StableAttr{
 				Mode: syscall.S_IFREG,
 				Ino:  ino,
@@ -816,7 +826,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			}
 			child := d.NewInode(ctx, node, stable)
 			out.Mode = syscall.S_IFREG | 0644
-			out.Size = uint64(len(bazarrDummySRT))
+			out.Size = uint64(len(bazarrvfs.DummySRT))
 			out.Ino = ino
 			return child, 0
 		}
@@ -4177,9 +4187,6 @@ func restorePlaybackStates(db *metadb.DB) {
 	logger.Printf("[V750] Restored %d/%d PlaybackStates, %d priorities reapplied", restored, len(records), priorityApplied)
 }
 
-//go:embed settings.html
-var settingsHTML []byte
-
 // checkHardwareSupport warns when the CPU sits below the Raspberry Pi 4's effective floor.
 // On amd64 that means AVX2: any x86_64 CPU without it (everything before ~2013, Haswell/
 // Excavator) forces Go's crypto/sha1 onto its slowest pure-scalar path, and full-swarm piece
@@ -4286,7 +4293,7 @@ func main() {
 	}
 
 	globalConfig.Store(&cfg)
-	bazarrProviderRuntime := newRuntimeSubtitleProvider(gc().Bazarr)
+	bazarrProviderRuntime := bazarr.NewRuntimeProvider(gc().Bazarr)
 	subprovider.SetAppVersion(AppVersion)
 	subprovider.SetLogger(logger)
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
@@ -4710,11 +4717,6 @@ func main() {
 			ttffStats.stallCount.Load(), ttffStats.maxStallMS.Load())
 	})
 
-	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.Write(settingsHTML)
-	})
-
 	http.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/json")
@@ -4741,8 +4743,8 @@ func main() {
 			oldSubAPIKey := gc().Subtitle.APIKey
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
-			bazarrProviderRuntime.Set(newBazarrSubtitleProvider(gc().Bazarr))
-			clearBazarrVirtualSRTCache()
+			bazarrProviderRuntime.Set(bazarr.NewSubtitleProvider(gc().Bazarr))
+			bazarrvfs.ClearCache()
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 
 			newEnabled := gc().BlockListEnabled
@@ -4833,7 +4835,20 @@ func main() {
 		}
 	})
 
-	registerBazarrConfigAPI(bazarrProviderRuntime)
+	bazarr.RegisterConfigAPI(http.DefaultServeMux, bazarr.ConfigAPIOptions{
+		Runtime: bazarrProviderRuntime,
+		Get:     gc,
+		Store: func(cfg *config.Config) {
+			globalConfig.Store(cfg)
+		},
+		After: func(cfg config.Config) {
+			bazarrvfs.ClearCache()
+			if globalDirCache != nil {
+				globalDirCache.Delete(cfg.PhysicalSourcePath)
+				globalDirCache.Delete(cfg.FuseMountPath)
+			}
+		},
+	})
 
 	http.HandleFunc("/api/prowlarr/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -5111,6 +5126,7 @@ func main() {
 	)
 	dashHandler := dashboard.New(monCollector, logsDir)
 	http.HandleFunc("/dashboard", dashHandler.Dashboard)
+	http.HandleFunc("/control", dashHandler.Control)
 	http.HandleFunc("/api/health", dashHandler.Health)
 	http.HandleFunc("/api/torrents", dashHandler.Torrents)
 	http.HandleFunc("/api/speed-history", dashHandler.SpeedHistory)
