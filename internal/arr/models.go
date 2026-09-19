@@ -96,6 +96,8 @@ type SonarrSeries struct {
 	SeasonCount       int                `json:"seasonCount"`
 	Year              int                `json:"year"`
 	Path              string             `json:"path"`
+	Status            string             `json:"status"`
+	SeriesType        string             `json:"seriesType"`
 	Monitored         bool               `json:"monitored"`
 	TvdbID            int64              `json:"tvdbId"`
 	ImdbID            string             `json:"imdbId"`

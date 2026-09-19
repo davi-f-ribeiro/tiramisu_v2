@@ -448,6 +448,12 @@ func TestARRCollectionContractUsesLiteralEmptyArrays(t *testing.T) {
 			if len(rows) != 1 {
 				t.Fatalf("rows = %d, want 1", len(rows))
 			}
+			if path == "/api/v3/series" {
+				raw, ok := rows[0]["seriesType"]
+				if !ok || string(raw) != `"standard"` {
+					t.Fatalf("seriesType = %s in %s, want explicit standard", raw, path)
+				}
+			}
 			for _, key := range []string{"alternateTitles", "alternativeTitles"} {
 				raw, ok := rows[0][key]
 				if !ok {

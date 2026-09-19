@@ -729,6 +729,13 @@ func ensureSonarrSeriesBazarrArrays(s *SonarrSeries) {
 	if s == nil {
 		return
 	}
+	if s.Status == "" {
+		s.Status = "continuing"
+	}
+	if s.SeriesType == "" {
+		s.SeriesType = "standard"
+	}
+	s.Monitored = true
 	if s.AlternateTitles == nil {
 		if s.AlternativeTitles != nil {
 			s.AlternateTitles = s.AlternativeTitles
