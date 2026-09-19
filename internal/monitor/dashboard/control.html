@@ -1127,6 +1127,17 @@
                         </div>
                     </div>
 
+                    <div class="form-section">
+                        <div class="form-section-title">Warmup & SSD</div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>SSD Quota (GB)</label>
+                                <input type="number" name="disk_warmup_quota_gb">
+                                <div class="hint">SSD space for warmup cache. Saved in config.json; restart tiramisu to apply.</div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="form-section advanced hidden-permanently">
                         <div class="form-section-title">FUSE Timing & Buffers</div>
                         <div class="form-grid">
@@ -1380,11 +1391,6 @@
                                         </div>
                                         <input type="text" name="torrentsSavePath">
                                         <div class="hint">Warmup files path</div>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>SSD Quota (GB)</label>
-                                        <input type="number" name="disk_warmup_quota_gb">
-                                        <div class="hint">SSD space for warmup cache</div>
                                     </div>
                                 </div>
 
