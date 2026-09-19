@@ -43,7 +43,7 @@ type Candidate struct {
 
 // ListCandidates returns all discovered stream candidates for a movie by IMDB ID.
 func (api *MovieStubAPI) ListCandidates(ctx context.Context, imdbID, title string, year int) ([]Candidate, bool, error) {
-	streams, hadRaw, err := api.engine.getMovieStreams(ctx, imdbID, title, year)
+	streams, search, err := api.engine.getMovieStreams(ctx, imdbID, title, year)
 	if err != nil {
 		return nil, false, err
 	}
@@ -61,7 +61,7 @@ func (api *MovieStubAPI) ListCandidates(ctx context.Context, imdbID, title strin
 		}
 		candidates = append(candidates, c)
 	}
-	return candidates, hadRaw, nil
+	return candidates, search.HadRaw, nil
 }
 
 // Remove removes a movie stub file and its associated torrent from GoStorm.
@@ -276,22 +276,22 @@ func NewTVStubAPI(engine *TVGoEngine) *TVStubAPI {
 
 // TVCandidate represents a discovered stream/torrent candidate for a TV show.
 type TVCandidate struct {
-	Hash         string  `json:"hash"`
-	Title        string  `json:"title"`
-	IsFullpack   bool    `json:"is_fullpack"`
-	IsPartialPack bool   `json:"is_partial_pack"`
-	QualityScore int     `json:"quality_score"`
-	Season       int     `json:"season"`
-	EpisodeNum   int     `json:"episode_num"`
-	Seeders      int     `json:"seeders"`
-	SizeGB       float64 `json:"size_gb"`
-	Priority     int     `json:"priority"`
-	Source       string  `json:"source"`
+	Hash          string  `json:"hash"`
+	Title         string  `json:"title"`
+	IsFullpack    bool    `json:"is_fullpack"`
+	IsPartialPack bool    `json:"is_partial_pack"`
+	QualityScore  int     `json:"quality_score"`
+	Season        int     `json:"season"`
+	EpisodeNum    int     `json:"episode_num"`
+	Seeders       int     `json:"seeders"`
+	SizeGB        float64 `json:"size_gb"`
+	Priority      int     `json:"priority"`
+	Source        string  `json:"source"`
 }
 
 // ListCandidates returns all discovered stream candidates for a TV show.
 func (api *TVStubAPI) ListCandidates(ctx context.Context, imdbID string, tmdbID int, showName string, tmdbDetails *tmdb.TVDetail) ([]TVCandidate, error) {
-	streams := api.engine.getStreams(ctx, imdbID, tmdbID, showName, tmdbDetails)
+	streams, _ := api.engine.getStreams(ctx, imdbID, tmdbID, showName, tmdbDetails)
 
 	var candidates []TVCandidate
 	for _, s := range streams {
