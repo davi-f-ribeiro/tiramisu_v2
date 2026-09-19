@@ -16,6 +16,9 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
+//go:embed control.html
+var controlHTML []byte
+
 // Handler serves the dashboard and API endpoints.
 type Handler struct {
 	collector *collector.Collector
@@ -31,6 +34,12 @@ func New(c *collector.Collector, logsDir string) *Handler {
 func (h *Handler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(dashboardHTML)
+}
+
+// Control serves the native settings/control page.
+func (h *Handler) Control(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(controlHTML)
 }
 
 // Health serves the /api/health JSON endpoint.

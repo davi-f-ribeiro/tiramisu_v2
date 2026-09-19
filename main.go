@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,10 +28,13 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"tiramisu/internal/ai"
 	"tiramisu/internal/arr"
+	"tiramisu/internal/bazarr"
+	"tiramisu/internal/bazarrvfs"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/mediaserver"
+	tmdbpkg "tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/config"
 	server "tiramisu/internal/gostorm"
 	"tiramisu/internal/gostorm/native"
@@ -42,6 +44,7 @@ import (
 	torrutils "tiramisu/internal/gostorm/torr/utils"
 	tsutils "tiramisu/internal/gostorm/utils"
 	"tiramisu/internal/gostorm/web"
+	"tiramisu/internal/library"
 	"tiramisu/internal/lockmgr"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/monitor/collector"
@@ -58,10 +61,10 @@ import (
 	"tiramisu/internal/syncer/engines"
 	"tiramisu/internal/syncer/scheduler"
 	"tiramisu/internal/telemetry"
+	"tiramisu/internal/tuner"
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
-	tmdbpkg "tiramisu/internal/catalog/tmdb"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -119,12 +122,7 @@ func resolvePreferredLang(cfg *config.Config) subprovider.LanguageTag {
 // Global Prowlarr client for indexer queries (nil when disabled).
 var prowlarrClient *prowlarr.Client
 
-// GetEffectiveConcurrencyLimit returns AI limit if set, otherwise globalConfig default
 func GetEffectiveConcurrencyLimit() int {
-	aiLimit := int(atomic.LoadInt32(&ai.CurrentLimit))
-	if aiLimit > 0 {
-		return aiLimit
-	}
 	return gc().MasterConcurrencyLimit
 }
 
@@ -488,7 +486,8 @@ func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 // VirtualMkvRoot - nodo radice per file virtuali .mkv
 type VirtualMkvRoot struct {
 	fs.Inode
-	sourcePath string
+	sourcePath       string
+	subtitleProvider subprovider.SubtitleProvider
 }
 
 // Compile-time interface checks - verificano che implementiamo correttamente le interfacce
@@ -536,6 +535,23 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 		}
 	}
 
+	if strings.HasSuffix(name, ".srt") {
+		if entry, ok := bazarrvfs.Lookup(r.sourcePath, name, bazarrVFSOptions(r.subtitleProvider)); ok {
+			ino := getFileInodeFromMap(fullPath)
+			node := bazarrvfs.NewNode(entry, bazarrVFSOptions(r.subtitleProvider))
+			stable := fs.StableAttr{
+				Mode: syscall.S_IFREG,
+				Ino:  ino,
+				Gen:  1,
+			}
+			child := r.NewInode(ctx, node, stable)
+			out.Mode = syscall.S_IFREG | 0644
+			out.Size = uint64(len(bazarrvfs.DummySRT))
+			out.Ino = ino
+			return child, 0
+		}
+	}
+
 	// Fallback for directories or other files
 	st := syscall.Stat_t{}
 	if err := syscall.Lstat(fullPath, &st); err != nil {
@@ -543,7 +559,7 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	if (st.Mode & syscall.S_IFMT) == syscall.S_IFDIR {
-		node := &VirtualDirNode{physicalPath: fullPath}
+		node := &VirtualDirNode{physicalPath: fullPath, subtitleProvider: r.subtitleProvider}
 		dirIno := getDirInodeFromMap(fullPath)
 		stable := fs.StableAttr{
 			Mode: syscall.S_IFDIR,
@@ -631,6 +647,10 @@ func (r *VirtualMkvRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		})
 	}
 
+	if virtualSRTs := bazarrvfs.Entries(r.sourcePath, len(result), bazarrVFSOptions(r.subtitleProvider)); len(virtualSRTs) > 0 {
+		result = append(result, virtualSRTs...)
+	}
+
 	globalDirCache.Put(r.sourcePath, result)
 
 	return &nfsDirStream{entries: result}, 0
@@ -671,7 +691,17 @@ func (r *VirtualMkvRoot) Statfs(ctx context.Context, out *fuse.StatfsOut) syscal
 // VirtualDirNode - nodo per directory (movies, tv) con file .mkv virtuali
 type VirtualDirNode struct {
 	fs.Inode
-	physicalPath string // Path fisico della directory (es. /mnt/torrserver/movies)
+	physicalPath     string // Path fisico della directory (es. /mnt/torrserver/movies)
+	subtitleProvider subprovider.SubtitleProvider
+}
+
+func bazarrVFSOptions(provider subprovider.SubtitleProvider) bazarrvfs.Options {
+	return bazarrvfs.Options{
+		Provider:     provider,
+		InodeForPath: getFileInodeFromMap,
+		Go:           safeGo,
+		Logf:         logger.Printf,
+	}
 }
 
 // Compile-time interface checks for VirtualDirNode
@@ -737,6 +767,10 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		}
 	}
 
+	if virtualSRTs := bazarrvfs.Entries(d.physicalPath, len(result), bazarrVFSOptions(d.subtitleProvider)); len(virtualSRTs) > 0 {
+		result = append(result, virtualSRTs...)
+	}
+
 	globalDirCache.Put(d.physicalPath, result)
 
 	return &nfsDirStream{entries: result}, 0
@@ -779,6 +813,20 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 			out.Ino = ino
 			return child, 0
 		}
+		if entry, ok := bazarrvfs.Lookup(d.physicalPath, name, bazarrVFSOptions(d.subtitleProvider)); ok {
+			ino := getFileInodeFromMap(fullPath)
+			node := bazarrvfs.NewNode(entry, bazarrVFSOptions(d.subtitleProvider))
+			stable := fs.StableAttr{
+				Mode: syscall.S_IFREG,
+				Ino:  ino,
+				Gen:  1,
+			}
+			child := d.NewInode(ctx, node, stable)
+			out.Mode = syscall.S_IFREG | 0644
+			out.Size = uint64(len(bazarrvfs.DummySRT))
+			out.Ino = ino
+			return child, 0
+		}
 		// .srt não existe em disco — não é erro: ainda será gerado
 	}
 
@@ -789,7 +837,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	}
 
 	if (st.Mode & syscall.S_IFMT) == syscall.S_IFDIR {
-		node := &VirtualDirNode{physicalPath: fullPath}
+		node := &VirtualDirNode{physicalPath: fullPath, subtitleProvider: d.subtitleProvider}
 		dirIno := getDirInodeFromMap(fullPath)
 		stable := fs.StableAttr{
 			Mode: syscall.S_IFDIR,
@@ -881,6 +929,11 @@ func invalidateSyncRemovedPath(path string) {
 		forceCloseVirtualFile(path)
 		registry.RemoveFromRegistry(path)
 	}
+	// The directory listing is not the only way back to a removed stub: a lookup by
+	// exact path is served from the metadata cache, which holds entries for 24h.
+	if metaCache != nil {
+		metaCache.Delete(path)
+	}
 	globalDirCache.Delete(filepath.Dir(path))
 	// Covers removed directories too (empty season/show dir cleanup).
 	globalDirCache.Delete(path)
@@ -920,6 +973,11 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 
 	registry.RemoveFromRegistry(fullPath)
 	globalDirCache.Delete(d.physicalPath)
+	// Same reason as the sync removal path: a lookup by exact path is answered from
+	// the metadata cache, which would keep serving this file for the whole TTL.
+	if metaCache != nil {
+		metaCache.Delete(fullPath)
+	}
 
 	logger.Printf("UNLINK COMPLETE: file deleted successfully")
 	return 0
@@ -1052,7 +1110,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	headReady := false
 	tailReady := false
 	if warmup.DiskWarmup != nil && hashStr != "" {
-		headReady = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
+		headReady = warmup.DiskWarmup.HeadReady(hashStr, urlFileIdx)
 		tailReady = warmup.DiskWarmup.TailReady(hashStr, urlFileIdx)
 	}
 	ttffRegister(n.vMeta.Path, n.vMeta.Size, hashStr, headReady, tailReady)
@@ -1523,9 +1581,11 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 	if h.hash == "" {
 		// Late hash resolution for handles where Open() didn't complete it.
 		if hash, fileID, err := resolveTargetFile(h.url, h.size, h.path); err == nil {
+			h.mu.Lock()
 			h.hash = hash
 			h.fileID = fileID
-			logger.Printf("[Pump] Late resolution success: %s", h.hash[:8])
+			h.mu.Unlock()
+			logger.Printf("[Pump] Late resolution success: %s", hash[:8])
 		} else {
 			logger.Printf("[Pump] Warning: hash empty for %s, warmup disabled", filepath.Base(h.path))
 		}
@@ -2218,6 +2278,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		fuseShortReadFailed.Add(1)
 		logger.Printf("[ShortRead] Unfillable %d/%d bytes at offset %d for %s - EIO (a partial read would cache zeros)",
 			total, len(dest), off, filepath.Base(h.path))
+		ttffReadFailed(h.path)
 		return nil, syscall.EIO
 	}
 
@@ -2829,6 +2890,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	}
 
 	// If everything fails, return EAGAIN as last resort
+	ttffReadFailed(h.path)
 	return nil, syscall.EAGAIN
 
 DATA_READY:
@@ -2933,6 +2995,11 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	ttffReleaseClose(h.path)
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
 
+	// Delete from activeHandles here, not at the end: the early returns below (probe
+	// without slot, replaced pump) would otherwise leak this entry, and both the live
+	// handle checks (anyLiveHandleFor*) and cleanup's activePaths trust the map.
+	activeHandles.Delete(h)
+
 	if val, ok := activePumps.Load(h.path); ok {
 		ps := val.(*NativePumpState)
 		// Only primary handles persist position; secondary probes have arbitrary offsets.
@@ -3009,8 +3076,6 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 
 	// Nil local reference only; pump goroutine owns the reader lifecycle via captured copy.
 	h.nativeReader = nil
-
-	activeHandles.Delete(h)
 
 	// Fast-drop (5s) for scanner probes never confirmed by webhook; 30s otherwise.
 	retentionDelay := 30 * time.Second
@@ -3136,11 +3201,13 @@ func getOrReadMeta(path string) (*vfs.Metadata, error) {
 			}
 
 			m = &vfs.Metadata{
-				URL:    fileMeta.URL,
-				Size:   fileMeta.Size,
-				Mtime:  fileMeta.Mtime,
-				Path:   fileMeta.Path,
-				ImdbID: fileMeta.ImdbID,
+				URL:             fileMeta.URL,
+				Size:            fileMeta.Size,
+				Mtime:           fileMeta.Mtime,
+				Path:            fileMeta.Path,
+				ImdbID:          fileMeta.ImdbID,
+				RadarrID:        fileMeta.RadarrID,
+				SonarrEpisodeID: fileMeta.SonarrEpisodeID,
 			}
 
 			metaCache.Put(path, m, approximateMetadataSize(m))
@@ -3630,14 +3697,108 @@ func abs(n int64) int64 {
 	return n
 }
 
-func extractHashSuffix(filename string) string {
-	ext := filepath.Ext(filename)
-	base := strings.TrimSuffix(filename, ext)
-	idx := strings.LastIndex(base, "_")
-	if idx != -1 && len(base)-idx-1 == 8 {
-		return base[idx+1:]
+// exactMatchEntry is one playbackRegistry entry: a virtual path and its state.
+type exactMatchEntry struct {
+	path  string
+	state *PlaybackState
+}
+
+// exactMatchKeys carries the webhook-side keys used by pass-1 matching.
+type exactMatchKeys struct {
+	imdbID    string
+	basenames []string
+}
+
+// findExactMatch selects the pass-1 match among the registry entries.
+//
+// The hash suffix is deliberately NOT a key: every episode of a season pack shares
+// the same hash8 in its filename (HashPrefix = hash[:8]), so a suffix-only match can
+// bind the wrong episode — e.g. the media.stop of E01 killing the pump of E02 that
+// is actually playing. The filename (physical identity) wins over the IMDB ID
+// (metadata identity), which also protects against an IMDB id polluted by a
+// previous mis-matched media.play.
+func findExactMatch(keys exactMatchKeys, entries []exactMatchEntry) (string, *PlaybackState) {
+	for _, e := range entries {
+		if e.state == nil {
+			continue
+		}
+		base := filepath.Base(e.path)
+		for _, want := range keys.basenames {
+			if want == base {
+				return e.path, e.state
+			}
+		}
 	}
-	return ""
+	if keys.imdbID != "" {
+		for _, e := range entries {
+			if e.state == nil {
+				continue
+			}
+			if imdb := e.state.GetImdbID(); imdb != "" && imdb == keys.imdbID {
+				return e.path, e.state
+			}
+		}
+	}
+	return "", nil
+}
+
+// snapshotPlaybackEntries copies the registry into a slice: both pass-1 scans within
+// one call see the same entries and order, independent of concurrent registry writes.
+func snapshotPlaybackEntries() []exactMatchEntry {
+	entries := make([]exactMatchEntry, 0, 16)
+	playbackRegistry.Range(func(key, value interface{}) bool {
+		entries = append(entries, exactMatchEntry{path: key.(string), state: value.(*PlaybackState)})
+		return true
+	})
+	return entries
+}
+
+// anyLiveHandleFor reports whether a FUSE handle for path is still registered. It reads
+// activeHandles (the live source of truth) instead of globalOpenTracker on purpose: the
+// tracker is not decremented when media.stop deletes the pump before Release, so it can
+// latch a stale count and would block stops forever.
+func anyLiveHandleFor(path string) bool {
+	found := false
+	activeHandles.Range(func(key, _ interface{}) bool {
+		if key.(*MkvHandle).path == path {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// anyLiveHandleForHashExcept is anyLiveHandleForHash excluding one path: the file being
+// stopped still has its own handle open at webhook time and must not count as a sibling.
+func anyLiveHandleForHashExcept(hash, excludePath string) bool {
+	if hash == "" {
+		return false
+	}
+	found := false
+	activeHandles.Range(func(key, _ interface{}) bool {
+		h := key.(*MkvHandle)
+		if h.path == excludePath {
+			return true
+		}
+		h.mu.Lock()
+		hashOf := h.hash
+		h.mu.Unlock()
+		if hashOf == hash {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// shouldDropTorrentPriority reports whether a media.stop may deactivate priority for
+// the torrent: never while a file other than the one being stopped still has an open
+// handle on the same hash (season-pack episodes share it, so priority-off would hit
+// the live stream).
+func shouldDropTorrentPriority(hash, excludePath string) bool {
+	return hash != "" && !anyLiveHandleForHashExcept(hash, excludePath)
 }
 
 // handlePlexWebhook gestisce i messaggi in arrivo dal server Plex
@@ -3724,21 +3885,9 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			return true
 		})
 
-		// Two-pass matching: exact first (IMDB, hash, filename), fuzzy only as fallback.
-
-		// Extract hash suffix from webhook payload (once, outside loop)
-		targetSuffix := ""
-		for _, m := range payload.Metadata.Media {
-			for _, p := range m.Part {
-				if suffix := extractHashSuffix(p.File); suffix != "" {
-					targetSuffix = suffix
-					break
-				}
-			}
-			if targetSuffix != "" {
-				break
-			}
-		}
+		// Two-pass matching: exact first (filename, IMDB), fuzzy only as fallback.
+		// The hash suffix is not a key: season-pack episodes share it (HashPrefix =
+		// hash[:8]), so a suffix-only match can bind the wrong episode.
 
 		// Extract IMDB ID via regex on raw payload (struct unmarshal would cause UnmarshalTypeError
 		// due to Plex sending both lowercase "guid" and capital "Guid" fields).
@@ -3747,38 +3896,19 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			webhookImdbID = m[1]
 		}
 
-		// Pass 1: Exact matches only (IMDB ID, hash suffix, filename)
-		var exactMatch string
-		var exactState *PlaybackState
-		playbackRegistry.Range(func(key, value interface{}) bool {
-			path := key.(string)
-			state := value.(*PlaybackState)
-
-			// Tentativo 0a: Match per IMDB ID (V281 — immune a titoli localizzati)
-			if imdb := state.GetImdbID(); webhookImdbID != "" && imdb != "" && imdb == webhookImdbID {
-				exactMatch = path
-				exactState = state
-				return false
-			}
-
-			if targetSuffix != "" && extractHashSuffix(path) == targetSuffix {
-				exactMatch = path
-				exactState = state
-				return false
-			}
-
-			// Tentativo 1: Match per Filename (se presente nel payload)
-			for _, m := range payload.Metadata.Media {
-				for _, p := range m.Part {
-					if filepath.Base(p.File) == filepath.Base(path) {
-						exactMatch = path
-						exactState = state
-						return false
-					}
+		// Pass 1: Exact matches only (filename, IMDB ID).
+		var basenames []string
+		for _, m := range payload.Metadata.Media {
+			for _, p := range m.Part {
+				if b := filepath.Base(p.File); b != "" && b != "." {
+					basenames = append(basenames, b)
 				}
 			}
-			return true
-		})
+		}
+		exactMatch, exactState := findExactMatch(
+			exactMatchKeys{imdbID: webhookImdbID, basenames: basenames},
+			snapshotPlaybackEntries(),
+		)
 
 		// Pass 1c: IMDB bootstrap — if webhookImdbID is available but no state has it yet,
 		// find the unique registered path of the matching library type with empty ImdbID.
@@ -3871,6 +4001,8 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			exactState.mu.Lock()
 			exactState.IsStopped = false
 			// Cache webhookImdbID into state for fast IMDB matching in future sessions.
+			// A pass-1 match is precise (filename or IMDB ID) and cannot cross-pollinate
+			// episodes of a season pack; the pass-1c/fuzzy fallbacks are less precise.
 			if exactState.ImdbID == "" && webhookImdbID != "" {
 				exactState.ImdbID = webhookImdbID
 				logger.Printf("[PLEX] IMDB ID cached for future matching: %s → %s", filepath.Base(exactMatch), webhookImdbID)
@@ -3932,54 +4064,27 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		seriesTitle := strings.ToLower(payload.Metadata.GrandparentTitle)
 		targetYear := payload.Metadata.Year
 
-		stopTargetSuffix := ""
-		for _, m := range payload.Metadata.Media {
-			for _, p := range m.Part {
-				if suffix := extractHashSuffix(p.File); suffix != "" {
-					stopTargetSuffix = suffix
-					break
-				}
-			}
-			if stopTargetSuffix != "" {
-				break
-			}
-		}
-
 		stopImdbID := ""
 		if m := reImdbID.FindStringSubmatch(payloadStr); len(m) > 1 {
 			stopImdbID = m[1]
 		}
 
-		// Pass 1: Exact matches (IMDB ID, hash suffix, filename)
-		var stopMatch string
-		var stopState *PlaybackState
-		playbackRegistry.Range(func(key, value interface{}) bool {
-			path := key.(string)
-			state := value.(*PlaybackState)
-
-			if imdb := state.GetImdbID(); stopImdbID != "" && imdb != "" && imdb == stopImdbID {
-				stopMatch = path
-				stopState = state
-				return false
-			}
-
-			if stopTargetSuffix != "" && extractHashSuffix(path) == stopTargetSuffix {
-				stopMatch = path
-				stopState = state
-				return false
-			}
-
-			for _, m := range payload.Metadata.Media {
-				for _, p := range m.Part {
-					if filepath.Base(p.File) == filepath.Base(path) {
-						stopMatch = path
-						stopState = state
-						return false
-					}
+		var basenames []string
+		for _, m := range payload.Metadata.Media {
+			for _, p := range m.Part {
+				if b := filepath.Base(p.File); b != "" && b != "." {
+					basenames = append(basenames, b)
 				}
 			}
-			return true
-		})
+		}
+
+		// Pass 1: Exact matches (filename, IMDB ID) — never the shared hash suffix.
+		stopMatch, stopState := findExactMatch(
+			exactMatchKeys{imdbID: stopImdbID, basenames: basenames},
+			snapshotPlaybackEntries(),
+		)
+
+		stopMatchFromFuzzy := false
 
 		// Pass 2: Fuzzy matches only if no exact match
 		if stopMatch == "" {
@@ -4022,17 +4127,54 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 					bestLevel = level
 					stopMatch = path
 					stopState = value.(*PlaybackState)
+					stopMatchFromFuzzy = true
 				}
 				return true
 			})
 		}
 
-		if stopMatch != "" && stopState != nil {
+		// Only a basename match (pass 1) is the file by construction. An IMDB-only match
+		// is precise on this deployment (episode-level IDs) but only when the registry
+		// holds exactly one entry with that ID; otherwise it is a guess like fuzzy.
+		matchByBasename := false
+		if stopMatch != "" {
+			base := filepath.Base(stopMatch)
+			for _, b := range basenames {
+				if b == base {
+					matchByBasename = true
+					break
+				}
+			}
+		}
+		imdbUnique := false
+		if stopMatch != "" && !matchByBasename && !stopMatchFromFuzzy && stopImdbID != "" {
+			n := 0
+			playbackRegistry.Range(func(_, v interface{}) bool {
+				ps, ok := v.(*PlaybackState)
+				if !ok || ps == nil {
+					return true
+				}
+				if ps.GetImdbID() == stopImdbID {
+					n++
+				}
+				return n <= 1
+			})
+			imdbUnique = n == 1
+		}
+
+		// A fuzzy (pass 2) match is a name-similarity guess; an IMDB-only match is only
+		// trusted when unique. If such a match still has a live handle it is likely a
+		// sibling episode being read, so a late or spurious stop must not kill it.
+		// Basename and unique-IMDB matches are honored even with the handle open:
+		// ignoring them would leave the pump alive until the 2h idle timeout (V262).
+		if stopMatch != "" && stopState != nil && !matchByBasename && !imdbUnique && anyLiveHandleFor(stopMatch) {
+			logger.Printf("[PLEX] STOP ignored for %s: fuzzy or ambiguous match with handle still open", filepath.Base(stopMatch))
+		} else if stopMatch != "" && stopState != nil {
 			stopState.mu.Lock()
 			stopState.IsStopped = true
 			stopState.mu.Unlock()
 			stopState.SetHealthy(false) // persists with IsStopped=true
-			logger.Printf("[PLEX] Priority removed for: %s (Event: %s)", filepath.Base(stopMatch), payload.Event)
+			logger.Printf("[PLEX] STOP applied for: %s (Event: %s)", filepath.Base(stopMatch), payload.Event)
 
 			if val, ok := activePumps.Load(stopMatch); ok {
 				ps := val.(*NativePumpState)
@@ -4056,8 +4198,10 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Deactivate Core Priority
-			if stopState.Hash != "" {
+			// Deactivate Core Priority unless a sibling episode of the same torrent is
+			// still live (shared hash): priority/aggressive off and the 30s expiry would
+			// hit the stream that is actually playing.
+			if shouldDropTorrentPriority(stopState.Hash, stopMatch) {
 				h := metainfo.NewHashFromHex(stopState.Hash)
 				if t := web.BTS.GetTorrent(h); t != nil {
 					t.IsPriority.Store(false)
@@ -4133,9 +4277,6 @@ func restorePlaybackStates(db *metadb.DB) {
 	}
 	logger.Printf("[V750] Restored %d/%d PlaybackStates, %d priorities reapplied", restored, len(records), priorityApplied)
 }
-
-//go:embed settings.html
-var settingsHTML []byte
 
 // checkHardwareSupport warns when the CPU sits below the Raspberry Pi 4's effective floor.
 // On amd64 that means AVX2: any x86_64 CPU without it (everything before ~2013, Haswell/
@@ -4243,6 +4384,7 @@ func main() {
 	}
 
 	globalConfig.Store(&cfg)
+	bazarrProviderRuntime := bazarr.NewRuntimeProvider(gc().Bazarr)
 	subprovider.SetAppVersion(AppVersion)
 	subprovider.SetLogger(logger)
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
@@ -4328,30 +4470,7 @@ func main() {
 
 	nativeBridge = native.NewNativeClient()
 
-	if gc().AIURL != "" {
-		provider := ai.AIProvider{
-			URL:     gc().AIURL,
-			APIKey:  gc().AI_API_KEY,
-			Model:   gc().AIModel,
-			IsLocal: gc().AIProvider == "" || gc().AIProvider == "local",
-			GetBufferPct: func() int {
-				total, _, _ := raCache.Stats()
-				budget := gc().ReadAheadBudget
-				if budget <= 0 {
-					return 100
-				}
-				pct := int(total * 100 / budget)
-				if pct > 100 {
-					pct = 100
-				}
-				return pct
-			},
-			GetSaturation: func() int {
-				return len(masterDataSemaphore)
-			},
-		}
-		go ai.StartAITuner(context.Background(), provider)
-	}
+	go tuner.Start(context.Background())
 
 	if gc().BlockListEnabled && gc().BlockListURL != "" {
 		startBlockListLoop(gc().BlockListURL)
@@ -4407,6 +4526,33 @@ func main() {
 					torrent.V304LoadBans(ips)
 					logger.Printf("[V304] Restored %d persisted peer bans", len(ips))
 				}
+				// Reachability outcomes: the sync engines read the counter to tell a dead
+				// release from a slow one before dropping a title.
+				failDB := stateDB
+				native.ReachabilityOutcome = func(hash string, resolved bool) {
+					var err error
+					if resolved {
+						// Success is the common case: read first so the usual read costs a
+						// lookup instead of a write transaction.
+						if n, qerr := failDB.MetadataFailureCount(hash); qerr != nil || n == 0 {
+							return
+						}
+						err = failDB.ClearMetadataFailure(hash)
+					} else {
+						short := hash
+						if len(short) > 8 {
+							short = short[:8]
+						}
+						// Deliberately does not say why: the session layer that condemned
+						// already logged its own reason, with duration and outcome.
+						logger.Printf("[DeadSwarm] %s did not answer", short)
+						err = failDB.RecordMetadataFailure(hash)
+					}
+					if err != nil {
+						logger.Printf("WARNING: reachability bookkeeping for %s: %v", hash, err)
+					}
+				}
+
 				banDB := stateDB
 				torrent.V304SetOnBan(func(ip string) {
 					if err := banDB.SaveV304Ban(ip); err != nil {
@@ -4520,8 +4666,8 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				// Cleanup stale entries: negative cache 12h TTL, fullpack cache 7 days TTL
-				globalSyncCacheManager.CleanupStaleEntries(12*time.Hour, 7*24*time.Hour)
+				// Cleanup stale entries: negative cache 12h TTL
+				globalSyncCacheManager.CleanupStaleEntries(12 * time.Hour)
 			case <-backgroundStopChan:
 				return
 			}
@@ -4666,11 +4812,6 @@ func main() {
 			ttffStats.stallCount.Load(), ttffStats.maxStallMS.Load())
 	})
 
-	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.Write(settingsHTML)
-	})
-
 	http.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/json")
@@ -4697,6 +4838,8 @@ func main() {
 			oldSubAPIKey := gc().Subtitle.APIKey
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
+			bazarrProviderRuntime.Set(bazarr.NewSubtitleProvider(gc().Bazarr))
+			bazarrvfs.ClearCache()
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 
 			newEnabled := gc().BlockListEnabled
@@ -4785,6 +4928,21 @@ func main() {
 			logger.Printf("[Config] Updated via Dashboard API")
 			w.WriteHeader(200)
 		}
+	})
+
+	bazarr.RegisterConfigAPI(http.DefaultServeMux, bazarr.ConfigAPIOptions{
+		Runtime: bazarrProviderRuntime,
+		Get:     gc,
+		Store: func(cfg *config.Config) {
+			globalConfig.Store(cfg)
+		},
+		After: func(cfg config.Config) {
+			bazarrvfs.ClearCache()
+			if globalDirCache != nil {
+				globalDirCache.Delete(cfg.PhysicalSourcePath)
+				globalDirCache.Delete(cfg.FuseMountPath)
+			}
+		},
 	})
 
 	http.HandleFunc("/api/prowlarr/search", func(w http.ResponseWriter, r *http.Request) {
@@ -4916,6 +5074,7 @@ func main() {
 				Language:        gc().Language,
 				QualityScoring:  gc().QualityScoringConfig,
 				InvalidatePath:  invalidateSyncRemovedPath,
+				DB:              stateDB,
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,
@@ -5048,6 +5207,65 @@ func main() {
 		logger.Printf("[StubManagement] enabled at :%d/stubs", gc().MetricsPort)
 	}
 
+	// Library API (external clients)
+	// Same work the sync engines do for one title, without the discovery: register the
+	// torrent, wait for its file list, write the stub. It exists so an agent that has
+	// no access to the filesystem can still file a title into the library.
+	{
+		var registry library.EpisodeRegistry
+		if stateDB != nil {
+			registry = stateDB
+		}
+		libMgr := library.New(library.Config{
+			MoviesDir:      filepath.Join(gc().PhysicalSourcePath, "movies"),
+			TVDir:          filepath.Join(gc().PhysicalSourcePath, "tv"),
+			GoStormURL:     gc().GoStormBaseURL,
+			GoStorm:        engines.NewGoStormClient(gc().GoStormBaseURL),
+			Registry:       registry,
+			InvalidatePath: invalidateSyncRemovedPath,
+			// Read-only view of the holes the reaper left, for a client that can decide
+			// what to do about them.
+			Gaps: func() ([]library.Gap, error) {
+				if stateDB == nil {
+					return nil, nil
+				}
+				rows, err := stateDB.EpisodeGaps()
+				if err != nil {
+					return nil, err
+				}
+				out := make([]library.Gap, 0, len(rows))
+				for _, g := range rows {
+					// Same spelling the sync logs use, so a client and the log agree on
+					// what the show is called.
+					show := engines.ShowNameFromEpisodePath(g.FilePath)
+					out = append(out, library.Gap{
+						EpisodeKey: g.EpisodeKey, Show: show, Season: g.Season,
+						ShowIMDB: g.ShowIMDB, Path: g.FilePath,
+						DeadHash: g.DeadHash, RemovedAt: g.RemovedAt,
+						LastAttempt: g.LastAttempt,
+					})
+				}
+				return out, nil
+			},
+			// Same record the FUSE unlink handler writes: without it the sync engines
+			// add the title back on their next run.
+			Blacklist: func(path, hash string) {
+				if globalTorrentRemover == nil || len(hash) != 40 {
+					return
+				}
+				globalTorrentRemover.addToBlacklist(hash, globalTorrentRemover.deriveTitleFromPath(path))
+			},
+			Logger:       logger,
+			MediaServer:  mediaserver.New(gc().MediaServerType, gc().Plex.URL, gc().Plex.Token),
+			MovieSection: gc().Plex.LibraryID,
+			TVSection:    gc().Plex.TVLibraryID,
+		})
+		libHandler := library.NewHandler(libMgr)
+		http.HandleFunc("/api/library/add", libHandler.Add)
+		http.HandleFunc("/api/library/remove", libHandler.Remove)
+		http.HandleFunc("/api/library/list", libHandler.List)
+	}
+
 	// Health Monitor + Dashboard (Fase 5)
 	logsDir := gc().LogDir
 	monCollector := collector.New(
@@ -5063,6 +5281,7 @@ func main() {
 	)
 	dashHandler := dashboard.New(monCollector, logsDir)
 	http.HandleFunc("/dashboard", dashHandler.Dashboard)
+	http.HandleFunc("/control", dashHandler.Control)
 	http.HandleFunc("/api/health", dashHandler.Health)
 	http.HandleFunc("/api/torrents", dashHandler.Torrents)
 	http.HandleFunc("/api/speed-history", dashHandler.SpeedHistory)
@@ -5135,7 +5354,7 @@ func main() {
 	}()
 
 	// Crea root node virtuale
-	rootData := &VirtualMkvRoot{sourcePath: source}
+	rootData := &VirtualMkvRoot{sourcePath: source, subtitleProvider: bazarrProviderRuntime}
 
 	// Enable attribute caching from config
 	attrTimeout := time.Duration(gc().AttrTimeoutSeconds * float64(time.Second))

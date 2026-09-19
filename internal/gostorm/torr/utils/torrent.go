@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"context"
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -28,47 +30,106 @@ var defTrackers = []string{
 	"udp://open.demonii.com:1337/announce",
 
 	// Tier 2: Affidabili globali
-	"udp://tracker.tiny-vps.com:6969/announce",
-	"udp://tracker.moeking.me:6969/announce",
 	"udp://tracker.dler.org:6969/announce",
-	"udp://opentracker.i2p.rocks:6969/announce",
 	"udp://tracker.openbittorrent.com:6969/announce",
 	"udp://tracker.theoks.net:6969/announce",
 
 	// Tier 3: HTTP/HTTPS fallback
 	"http://tracker.opentrackr.org:1337/announce",
-	"https://tracker.tamersunion.org:443/announce",
 	"https://tracker.lilithraws.org:443/announce",
 }
 var (
 	loadedTrackers []string
 	trackersMu     sync.Mutex
 	trackersOnce   sync.Once
+
+	onTrackersLoaded   func([]string)
+	onTrackersLoadedMu sync.Mutex
 )
 
-const trackersListURL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt"
+// trackersListURLs is the built-in mirror chain for the remote tracker list,
+// tried in order until one answers. A single URL (raw.githubusercontent.com)
+// is blocked or rate-limited often enough that one failed fetch used to leave
+// the run on the built-in trackers alone; mirrors on different hosts survive
+// exactly that.
+var trackersListURLs = []string{
+	"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt",
+	"https://ngosang.github.io/trackerslist/trackers_best_ip.txt",
+	"https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_best_ip.txt",
+	"https://raw.githack.com/ngosang/trackerslist/master/trackers_best_ip.txt",
+}
+
+// trackersFetchTimeout bounds each mirror attempt, not the whole chain: with a
+// per-mirror timeout the failover to the next host costs seconds, while one
+// shared timeout would make a hung first mirror eat the retry window.
+var trackersFetchTimeout = 5 * time.Second
+
+// trackersRefreshInterval is how often the remote list is reloaded once the
+// first fetch has succeeded. Without it the list stayed frozen at whatever was
+// served at boot: on a process that runs for weeks, entries that disappear from
+// the upstream list keep being offered, and new ones are never picked up.
+var trackersRefreshInterval = 12 * time.Hour
+
+// maxTrackersListBytes bounds what a mirror can make us allocate: the real list
+// is a few tens of KB, and io.ReadAll on a hostile or broken mirror is not.
+const maxTrackersListBytes = 1 << 20
+
+// trackersClient is shared so the mirror chain reuses connections. It carries no
+// Timeout: the per-mirror deadline and the shutdown cancellation both travel on
+// the request context.
+var trackersClient = &http.Client{}
+
+// trackersCtx is cancelled by StopTrackerLoader, ending the refresh loop and any
+// fetch in flight.
+var trackersCtx, trackersCancel = context.WithCancel(context.Background())
+
+// StopTrackerLoader stops the periodic tracker refresh and cancels a fetch in
+// flight. Safe to call more than once.
+func StopTrackerLoader() { trackersCancel() }
+
+// SetOnTrackersLoaded registers a callback invoked after every successful
+// tracker-list load or refresh with the merged remote+built-in list. Torrents
+// that start before the first fetch returns (and long-lived ones predating a
+// refresh) would otherwise keep the fallback list for their whole life:
+// spec.Trackers is built once, and nothing else re-applies the list.
+func SetOnTrackersLoaded(fn func([]string)) {
+	onTrackersLoadedMu.Lock()
+	onTrackersLoaded = fn
+	onTrackersLoadedMu.Unlock()
+	if fn == nil {
+		return
+	}
+	// Catch-up: the loader starts on the first GetDefTrackers call, so a list
+	// may already be loaded before the hook is registered. Applying it here
+	// keeps the fan-out independent from initialization order.
+	trackersMu.Lock()
+	list := loadedTrackers
+	trackersMu.Unlock()
+	if len(list) > 0 {
+		fn(append([]string(nil), list...))
+	}
+}
+
+func notifyTrackersLoaded(list []string) {
+	onTrackersLoadedMu.Lock()
+	fn := onTrackersLoaded
+	onTrackersLoadedMu.Unlock()
+	if fn != nil {
+		fn(list)
+	}
+}
 
 func GetTrackerFromFile() []string {
 	name := filepath.Join(settings.Path, "trackers.txt")
 	buf, err := os.ReadFile(name)
 	if err == nil {
-		list := strings.Split(string(buf), "\n")
-		var ret []string
-		for _, l := range list {
-			// Trim first: a file saved with CRLF leaves a trailing \r inside the announce
-			// URL, and leading spaces drop otherwise valid trackers.
-			l = strings.TrimSpace(l)
-			if strings.HasPrefix(l, "udp") || strings.HasPrefix(l, "http") {
-				ret = append(ret, l)
-			}
-		}
-		return ret
+		return parseTrackerLines(buf)
 	}
 	return nil
 }
 
 func GetDefTrackers() []string {
-	trackersOnce.Do(func() { go retryLoadTrackers() })
+	trackersOnce.Do(func() { go retryLoadTrackers(trackersCtx) })
 
 	trackersMu.Lock()
 	defer trackersMu.Unlock()
@@ -81,52 +142,151 @@ func GetDefTrackers() []string {
 // retryLoadTrackers keeps trying until the list is in. A single failed fetch at
 // startup used to leave the client on the built-in trackers for the whole run,
 // silently: those cover far fewer swarms, so torrents look peerless and time out.
-func retryLoadTrackers() {
+// After the first success it keeps the list fresh, reloading every
+// trackersRefreshInterval; a failed refresh keeps the previous list, and the
+// exponential backoff doubles again until one succeeds.
+func retryLoadTrackers(ctx context.Context) {
 	delay := 30 * time.Second
-	for attempt := 1; ; attempt++ {
-		if err := loadNewTracker(); err == nil {
+	attempt := 1
+	everLoaded := false
+	for {
+		if err := loadNewTracker(ctx); err == nil {
 			trackersMu.Lock()
 			n := len(loadedTrackers)
 			trackersMu.Unlock()
-			log.TLogln("Tracker list loaded:", n, "trackers")
+			// Distinct wording: in a week of logs a periodic refresh must not read
+			// like a restart.
+			if everLoaded {
+				log.TLogln("Tracker list refreshed:", n, "trackers")
+			} else {
+				log.TLogln("Tracker list loaded:", n, "trackers")
+			}
+			everLoaded = true
+			delay = 30 * time.Second
+			attempt = 1
+			if !waitOrStop(ctx, trackersRefreshInterval) {
+				return
+			}
+			continue
+		} else if ctx.Err() != nil {
 			return
 		} else {
-			log.TLogln("Tracker list download failed (attempt", attempt, "):", err, "— using", len(defTrackers), "built-in trackers, retrying in", delay)
+			trackersMu.Lock()
+			loaded := len(loadedTrackers)
+			trackersMu.Unlock()
+			if loaded > 0 {
+				log.TLogln("Tracker list refresh failed (attempt", attempt, "):", err, "\u2014 keeping", loaded, "loaded trackers, retrying in", delay)
+			} else {
+				log.TLogln("Tracker list download failed (attempt", attempt, "):", err, "\u2014 using", len(defTrackers), "built-in trackers, retrying in", delay)
+			}
 		}
-		time.Sleep(delay)
+		if !waitOrStop(ctx, delay) {
+			return
+		}
 		if delay < 30*time.Minute {
 			delay *= 2
 		}
+		attempt++
 	}
 }
 
-func loadNewTracker() error {
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(trackersListURL)
+// waitOrStop sleeps for d, returning false when ctx is cancelled first.
+func waitOrStop(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// loadNewTracker walks the mirror chain and returns on the first mirror that
+// answers with a usable list. The loaded list is replaced only on success, so a
+// chain where every mirror fails leaves the previous list in place.
+func loadNewTracker(ctx context.Context) error {
+	var errs []error
+	for _, url := range trackersListURLs {
+		ret, err := fetchTrackersFromURL(ctx, url)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("tracker fetch aborted: %w", ctx.Err())
+			}
+			errs = append(errs, fmt.Errorf("%s: %w", url, err))
+			continue
+		}
+		merged := mergeTrackers(ret, defTrackers)
+		trackersMu.Lock()
+		loadedTrackers = merged
+		trackersMu.Unlock()
+		notifyTrackersLoaded(merged)
+		return nil
+	}
+	return fmt.Errorf("all %d mirrors failed: %w", len(trackersListURLs), errors.Join(errs...))
+}
+
+func fetchTrackersFromURL(ctx context.Context, url string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, trackersFetchTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	resp, err := trackersClient.Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d", resp.StatusCode)
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	buf, err := io.ReadAll(resp.Body)
+	// One byte past the cap tells a truncated read from a legitimate one.
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxTrackersListBytes+1))
 	if err != nil {
-		return err
+		return nil, err
 	}
+	if len(buf) > maxTrackersListBytes {
+		return nil, fmt.Errorf("body over %d bytes", maxTrackersListBytes)
+	}
+	ret := parseTrackerLines(buf)
+	if len(ret) == 0 {
+		return nil, fmt.Errorf("no announce URL in %d bytes", len(buf))
+	}
+	return ret, nil
+}
+
+// parseTrackerLines keeps only announce URLs. A mirror answering 200 with an
+// error page would otherwise win the chain and feed its markup to the client as
+// trackers; rejecting it here is what makes the failover cover that case.
+func parseTrackerLines(buf []byte) []string {
 	var ret []string
 	for _, s := range strings.Split(string(buf), "\n") {
-		if s = strings.TrimSpace(s); s != "" {
+		// Trim first: a CRLF file leaves a trailing \r inside the announce URL.
+		s = strings.TrimSpace(s)
+		if strings.HasPrefix(s, "udp://") || strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
 			ret = append(ret, s)
 		}
 	}
-	if len(ret) == 0 {
-		return fmt.Errorf("empty list")
+	return ret
+}
+
+// mergeTrackers concatenates in order, dropping repeats: the remote list already
+// carries most built-ins, and a duplicate URL means announcing twice to the same
+// tracker on every torrent.
+func mergeTrackers(lists ...[]string) []string {
+	seen := make(map[string]struct{})
+	var ret []string
+	for _, list := range lists {
+		for _, t := range list {
+			if _, dup := seen[t]; dup {
+				continue
+			}
+			seen[t] = struct{}{}
+			ret = append(ret, t)
+		}
 	}
-	trackersMu.Lock()
-	loadedTrackers = append(ret, defTrackers...)
-	trackersMu.Unlock()
-	return nil
+	return ret
 }
 
 func PeerIDRandom(peer string) string {

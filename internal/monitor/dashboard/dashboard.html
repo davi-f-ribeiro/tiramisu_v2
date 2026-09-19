@@ -205,7 +205,6 @@ function mediaServers(list){
 
 function fmtSize(b){if(!b||b<1024)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0,v=b;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(1)+' '+u[i]}
 function trunc(t,n){return t&&t.length>n?t.slice(0,n)+'...':t||'--'}
-
 function drawShieldTimeline(events,history){
   const canvas=document.getElementById('shieldTimeline');
   if(!canvas)return;

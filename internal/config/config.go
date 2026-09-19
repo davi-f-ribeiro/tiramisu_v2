@@ -150,6 +150,15 @@ type LanguageConfig struct {
 	ExcludedFlags  []string `json:"excluded_flags"`
 }
 
+// BazarrConfig holds Bazarr-compatible subtitle API settings.
+type BazarrConfig struct {
+	Enabled        bool   `json:"enabled"`
+	URL            string `json:"url"`
+	APIKey         string `json:"api_key"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+	MaxResults     int    `json:"max_results"`
+}
+
 // Config holds all configurable parameters for the FUSE proxy
 type Config struct {
 	// --- Internal / Derived Fields ---
@@ -201,11 +210,12 @@ type Config struct {
 	BlockListURL     string `json:"blocklist_url"`
 	// BlockListFilter keeps only the ranges whose description matches this regexp.
 	// Empty keeps the whole list. See blockedIP.go for why published lists need it.
-	BlockListFilter string `json:"blocklist_filter"`
-	AIURL           string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
-	AIProvider      string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
-	AIModel         string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
-	AI_API_KEY      string `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
+	BlockListFilter string       `json:"blocklist_filter"`
+	AIURL           string       `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
+	AIProvider      string       `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
+	AIModel         string       `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
+	AI_API_KEY      string       `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
+	Bazarr          BazarrConfig `json:"bazarr"`
 
 	// --- FUSE Paths ---
 	// Fallback when CLI args are omitted. CLI args always take precedence.
@@ -268,13 +278,13 @@ type Config struct {
 
 	// --- Subtitle Provider (D1-D5: Rota C) ---
 	Subtitle struct {
-		Enabled      bool   `json:"enabled"`
-		APIKey       string `json:"api_key"`        // OpenSubtitles REST API key
-		BaseURL      string `json:"base_url"`       // Optional custom base URL
-		User         string `json:"user"`           // Optional username for JWT
-		Password     string `json:"password"`       // Optional password for JWT
-		Preferred    []string `json:"preferred_languages"` // e.g. ["por", "multi", "eng"]
-		MaxResults   int    `json:"max_results"`    // default: 5
+		Enabled    bool     `json:"enabled"`
+		APIKey     string   `json:"api_key"`             // OpenSubtitles REST API key
+		BaseURL    string   `json:"base_url"`            // Optional custom base URL
+		User       string   `json:"user"`                // Optional username for JWT
+		Password   string   `json:"password"`            // Optional password for JWT
+		Preferred  []string `json:"preferred_languages"` // e.g. ["por", "multi", "eng"]
+		MaxResults int      `json:"max_results"`         // default: 5
 	} `json:"subtitle"`
 
 	// --- Engine Scripts (populated in LoadConfig, not from JSON) ---
@@ -366,6 +376,12 @@ func LoadConfig() Config {
 		ProxyListenPort:  8080,
 		MetricsPort:      9080,
 		BlockListEnabled: false,
+		Bazarr: BazarrConfig{
+			Enabled:        false,
+			URL:            "http://127.0.0.1:6767",
+			TimeoutSeconds: 30,
+			MaxResults:     5,
+		},
 
 		EnableTelemetry: true,
 		TelemetryURL:    "https://telemetry.gostream.workers.dev",
@@ -514,6 +530,25 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("AI_API_KEY"); v != "" {
 		c.AI_API_KEY = v
+	}
+	if v := os.Getenv("TIRAMISU_BAZARR_ENABLED"); v != "" {
+		c.Bazarr.Enabled = v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("TIRAMISU_BAZARR_URL"); v != "" {
+		c.Bazarr.URL = v
+	}
+	if v := os.Getenv("TIRAMISU_BAZARR_API_KEY"); v != "" {
+		c.Bazarr.APIKey = v
+	}
+	if v := os.Getenv("TIRAMISU_BAZARR_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Bazarr.TimeoutSeconds = n
+		}
+	}
+	if v := os.Getenv("TIRAMISU_BAZARR_MAX_RESULTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Bazarr.MaxResults = n
+		}
 	}
 	if v := firstEnv("TIRAMISU_LOG_DIR", "GOSTREAM_LOG_DIR"); v != "" {
 		c.LogDir = v

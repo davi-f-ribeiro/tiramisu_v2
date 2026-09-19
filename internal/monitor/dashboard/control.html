@@ -469,6 +469,176 @@
             border-color: #991b1b;
         }
 
+        .bazarr-card {
+            margin-bottom: 16px;
+            background: var(--section-bg);
+            padding: 16px;
+            border-radius: 12px;
+            border: 1px solid var(--section-border);
+        }
+
+        .bazarr-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .bazarr-card-title {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            color: var(--muted);
+            letter-spacing: 0.5px;
+            border-left: 3px solid var(--accent);
+            padding-left: 10px;
+            margin-bottom: 6px;
+        }
+
+        .bazarr-card-description,
+        .bazarr-help {
+            font-size: 12px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .bazarr-status-badge {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border-radius: 999px;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-weight: 800;
+            border: 1px solid var(--border);
+            background: var(--input-bg);
+            color: var(--muted);
+        }
+
+        .bazarr-status-badge.ok {
+            background: #ecfdf5;
+            border-color: #a7f3d0;
+            color: #047857;
+        }
+
+        .bazarr-status-badge.error {
+            background: #fef2f2;
+            border-color: #fecaca;
+            color: #b91c1c;
+        }
+
+        [data-theme="dark"] .bazarr-status-badge.ok {
+            background: #064e3b;
+            border-color: #065f46;
+            color: #6ee7b7;
+        }
+
+        [data-theme="dark"] .bazarr-status-badge.error {
+            background: #7f1d1d;
+            border-color: #991b1b;
+            color: #fecaca;
+        }
+
+        .bazarr-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr 2fr 1fr 1fr auto;
+            gap: 12px;
+            align-items: end;
+        }
+
+        .bazarr-field label {
+            display: block;
+            font-size: 12px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+
+        .bazarr-field input,
+        .bazarr-field select {
+            width: 100%;
+            height: 40px;
+            padding: 0 10px;
+            border: 1.5px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            background: var(--input-bg);
+            color: var(--text);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .bazarr-field input:focus,
+        .bazarr-field select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+        }
+
+        .bazarr-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 14px;
+            border-top: 1px solid var(--section-border);
+        }
+
+        .bazarr-btn {
+            border: none;
+            border-radius: 8px;
+            height: 40px;
+            padding: 0 14px;
+            font-size: 13px;
+            font-weight: 800;
+            cursor: pointer;
+            transition: background 0.2s, opacity 0.2s;
+            white-space: nowrap;
+        }
+
+        .bazarr-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .bazarr-btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .bazarr-btn-primary:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+
+        .bazarr-btn-secondary {
+            background: var(--input-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        @media (max-width: 960px) {
+            .bazarr-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 600px) {
+            .bazarr-card-header,
+            .bazarr-actions {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .bazarr-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+
         .hint {
             font-size: 11px;
             color: var(--muted);
@@ -957,6 +1127,17 @@
                         </div>
                     </div>
 
+                    <div class="form-section">
+                        <div class="form-section-title">Warmup & SSD</div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>SSD Quota (GB)</label>
+                                <input type="number" name="disk_warmup_quota_gb">
+                                <div class="hint">SSD space for warmup cache. Saved in config.json; restart tiramisu to apply.</div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="form-section advanced hidden-permanently">
                         <div class="form-section-title">FUSE Timing & Buffers</div>
                         <div class="form-grid">
@@ -1135,7 +1316,7 @@
                                 </select>
                                 <div class="hint">Which product the URL and token below belong to. Selects how the library
                                     refresh after a sync is issued: Plex takes a token in the query string, Jellyfin an
-                                    <code>X-Emby-Token</code> header.</div>
+                                    <code>Authorization: MediaBrowser</code> header.</div>
                             </div>
                             <div class="form-group" style="grid-column: 1 / -1;">
                                 <label>Media Server URL</label>
@@ -1210,11 +1391,6 @@
                                         </div>
                                         <input type="text" name="torrentsSavePath">
                                         <div class="hint">Warmup files path</div>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>SSD Quota (GB)</label>
-                                        <input type="number" name="disk_warmup_quota_gb">
-                                        <div class="hint">SSD space for warmup cache</div>
                                     </div>
                                 </div>
 
@@ -1467,6 +1643,49 @@
                         <button type="button" class="btn btn-primary" onclick="saveSubtitle()"
                             style="margin-top: 12px;">Apply Subtitle Settings</button>
                         <div id="subtitle-save-status" class="status-msg"></div>
+                    </div>
+
+                    <div class="bazarr-card" id="bazarr-card">
+                        <div class="bazarr-card-header">
+                            <div>
+                                <div class="bazarr-card-title">Bazarr Virtual Subtitles</div>
+                                <div class="bazarr-card-description">Configuração centralizada para stubs virtuais <code>.srt</code> pt-BR no FUSE. Use a porta padrão 6767.</div>
+                            </div>
+                            <span id="bazarrStatusBadge" class="bazarr-status-badge">● Não testado</span>
+                        </div>
+
+                        <div class="bazarr-grid">
+                            <div class="bazarr-field">
+                                <label for="bazarrEnabled">Estado</label>
+                                <select id="bazarrEnabled" form="tiramisu-form">
+                                    <option value="false">Desativado</option>
+                                    <option value="true">Ativado</option>
+                                </select>
+                            </div>
+                            <div class="bazarr-field">
+                                <label for="bazarrUrl">URL do Bazarr</label>
+                                <input id="bazarrUrl" form="tiramisu-form" type="url" placeholder="http://127.0.0.1:6767">
+                            </div>
+                            <div class="bazarr-field">
+                                <label for="bazarrApiKey">API Key</label>
+                                <input id="bazarrApiKey" form="tiramisu-form" type="password" placeholder="Manter chave existente">
+                            </div>
+                            <div class="bazarr-field">
+                                <label for="bazarrTimeout">Timeout</label>
+                                <input id="bazarrTimeout" form="tiramisu-form" type="number" min="1" max="120" value="30">
+                            </div>
+                            <div class="bazarr-field">
+                                <label for="bazarrMaxResults">Máx.</label>
+                                <input id="bazarrMaxResults" form="tiramisu-form" type="number" min="1" max="50" value="5">
+                            </div>
+                            <button id="bazarrTestBtn" type="button" onclick="testBazarrConnection()" class="bazarr-btn bazarr-btn-secondary">Testar</button>
+                        </div>
+
+                        <div class="bazarr-actions">
+                            <div id="bazarrHelp" class="bazarr-help">Deixe a API key em branco para manter a chave salva.</div>
+                            <button id="bazarrSaveBtn" type="button" onclick="saveBazarrConfig()" class="bazarr-btn bazarr-btn-primary">Salvar Configurações</button>
+                        </div>
+                        <div id="bazarr-save-status" class="status-msg"></div>
                     </div>
 
                     <div class="form-section">
@@ -2897,6 +3116,91 @@
             if (res.ok) loadSubtitle();
         }
 
+        function setBazarrStatus(ok, message) {
+            const badge = document.getElementById('bazarrStatusBadge');
+            if (!badge) return;
+            badge.className = 'bazarr-status-badge ' + (ok ? 'ok' : 'error');
+            badge.textContent = (ok ? '● Conectado' : '● Erro') + (message ? ' — ' + message : '');
+        }
+
+        function setBazarrSaveStatus(ok, message) {
+            const status = document.getElementById('bazarr-save-status');
+            if (!status) return;
+            status.textContent = (ok ? '✓ ' : '✗ ') + message;
+            status.className = 'status-msg ' + (ok ? 'status-success' : 'status-error');
+            setTimeout(() => { status.className = 'status-msg'; }, 5000);
+        }
+
+        async function loadBazarrConfig() {
+            try {
+                const res = await fetch('/api/v1/config/bazarr');
+                const cfg = await res.json();
+                if (!res.ok) throw new Error(cfg.error || 'Falha ao carregar Bazarr');
+                document.getElementById('bazarrEnabled').value = String(!!cfg.enabled);
+                document.getElementById('bazarrUrl').value = cfg.url || 'http://127.0.0.1:6767';
+                document.getElementById('bazarrTimeout').value = cfg.timeout_seconds || 30;
+                document.getElementById('bazarrMaxResults').value = cfg.max_results || 5;
+                document.getElementById('bazarrApiKey').value = '';
+                document.getElementById('bazarrHelp').textContent = cfg.has_api_key ? 'API key já configurada. Deixe em branco para manter.' : 'Nenhuma API key configurada.';
+            } catch (e) {
+                setBazarrStatus(false, e.message);
+            }
+        }
+
+        async function saveBazarrConfig() {
+            const btn = document.getElementById('bazarrSaveBtn');
+            const old = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Salvando...';
+            try {
+                const payload = {
+                    enabled: document.getElementById('bazarrEnabled').value === 'true',
+                    url: document.getElementById('bazarrUrl').value.trim(),
+                    timeout_seconds: parseInt(document.getElementById('bazarrTimeout').value, 10) || 30,
+                    max_results: parseInt(document.getElementById('bazarrMaxResults').value, 10) || 5
+                };
+                const apiKey = document.getElementById('bazarrApiKey').value.trim();
+                if (apiKey !== '') payload.api_key = apiKey;
+
+                const res = await fetch('/api/v1/config/bazarr', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Falha ao salvar Bazarr');
+                setBazarrSaveStatus(true, 'Configurações do Bazarr salvas');
+                await loadBazarrConfig();
+            } catch (e) {
+                setBazarrSaveStatus(false, e.message);
+                setBazarrStatus(false, e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = old;
+            }
+        }
+
+        async function testBazarrConnection() {
+            const btn = document.getElementById('bazarrTestBtn');
+            const old = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Testando...';
+            try {
+                const res = await fetch('/api/v1/config/bazarr/test', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.message || data.error || 'Falha no teste');
+                setBazarrStatus(true, data.message || 'OK');
+                setBazarrSaveStatus(true, 'Conexão com Bazarr OK');
+            } catch (e) {
+                setBazarrStatus(false, e.message);
+                setBazarrSaveStatus(false, e.message);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = old;
+            }
+        }
+
+
         // Build pickers then load data
         buildDayPicker('sched-movies-days');
         buildDayPicker('sched-tv-days');
@@ -2905,6 +3209,7 @@
 
         // Load subtitle data
         loadSubtitle();
+        loadBazarrConfig();
 
     </script>
 </body>

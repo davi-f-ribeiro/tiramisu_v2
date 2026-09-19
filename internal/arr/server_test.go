@@ -1479,3 +1479,127 @@ func TestMountTMDBImages_JSONKeys(t *testing.T) {
 		t.Error(`JSON missing key "remoteUrl"`)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 15. trailing-slash handling (Bazarr sends /api/v3/series/ with trailing slash)
+// ---------------------------------------------------------------------------
+
+func TestSeriesListTrailingSlash(t *testing.T) {
+	store := newMockStore()
+	store.series[7] = &SonarrSeries{
+		ID: 7, Title: "The Series", TvdbID: 777, Path: "/data/shows/series",
+		ImdbID: "tt7777777",
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series/?apikey=teste", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var series []SonarrSeries
+	if err := json.NewDecoder(w.Body).Decode(&series); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+
+	if len(series) != 1 {
+		t.Fatalf("got %d series, want 1", len(series))
+	}
+
+	if series[0].ID != 7 {
+		t.Fatalf("id = %d, want 7", series[0].ID)
+	}
+}
+
+func TestSeriesListEmptyWithTrailingSlash(t *testing.T) {
+	store := newMockStore()
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/series/?apikey=teste", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var series []SonarrSeries
+	if err := json.NewDecoder(w.Body).Decode(&series); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+
+	if series == nil || len(series) != 0 {
+		t.Fatalf("expected empty array, got %v", series)
+	}
+}
+
+func TestMovieListTrailingSlash(t *testing.T) {
+	store := newMockStore()
+	store.movies[42] = &RadarrMovie{
+		ID: 42, Title: "The Movie", Year: 2019, Path: "/data/movies/the-movie",
+		TmdbID: 12345, ImdbID: "tt1234567",
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie/?apikey=teste", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movies []RadarrMovie
+	if err := json.NewDecoder(w.Body).Decode(&movies); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+
+	if len(movies) != 1 {
+		t.Fatalf("got %d movies, want 1", len(movies))
+	}
+
+	if movies[0].ID != 42 {
+		t.Fatalf("id = %d, want 42", movies[0].ID)
+	}
+}
+
+func TestMovieDetailTrailingSlash(t *testing.T) {
+	store := newMockStore()
+	store.movies[42] = &RadarrMovie{
+		ID: 42, Title: "The Movie", Year: 2019, Path: "/data/movies/the-movie",
+		TmdbID: 12345, ImdbID: "tt1234567",
+	}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/v3/movie/42/", nil)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var movie RadarrMovie
+	if err := json.NewDecoder(w.Body).Decode(&movie); err != nil {
+		t.Fatalf("json decode: %v", err)
+	}
+
+	if movie.ID != 42 {
+		t.Fatalf("id = %d, want 42", movie.ID)
+	}
+}

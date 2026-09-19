@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/library"
 )
 
 // GoStormClient handles HTTP operations with the GoStorm engine.
@@ -37,29 +37,30 @@ func NewGoStormClient(baseURL string) *GoStormClient {
 	}
 }
 
-// TorrentStats holds torrent information from GoStorm.
-type TorrentStats struct {
-	Hash        string     `json:"hash"`
-	Title       string     `json:"title"`
-	Length      int64      `json:"length"`
-	ActivePeers int        `json:"active_peers"`
-	FileStats   []FileStat `json:"file_stats"`
-}
+// TorrentStats and FileStat live in internal/library: the same shapes are returned by
+// the /api/library endpoints, and aliasing them lets *GoStormClient satisfy
+// library.GoStorm with no adapter.
+type TorrentStats = library.TorrentStats
 
-// FileStat holds file information from GoStorm.
-type FileStat struct {
-	ID     int    `json:"id"`
-	Path   string `json:"path"`
-	Length int64  `json:"length"`
-}
+type FileStat = library.FileStat
 
-// AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}.
-// Returns the 40-char info hash or empty string on failure.
+// AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}
+// and returns its hash. It hides whether the engine
+// echoed the hash back; callers that must not mistake an unacknowledged add for a
+// statement about the swarm should use AddTorrentConfirmed.
 func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (string, error) {
+	hash, _, err := c.AddTorrentConfirmed(ctx, magnet, title)
+	return hash, err
+}
+
+// AddTorrentConfirmed reports confirmed=false when the engine answered 2xx without
+// echoing a hash: the torrent may never have been taken, so its later silence says
+// nothing about the release.
+func (c *GoStormClient) AddTorrentConfirmed(ctx context.Context, magnet, title string) (string, bool, error) {
 	m := regexp.MustCompile(`xt=urn:btih:([a-fA-F0-9]{32,40})`)
 	match := m.FindStringSubmatch(magnet)
 	if len(match) < 2 {
-		return "", fmt.Errorf("cannot extract hash from magnet")
+		return "", false, fmt.Errorf("cannot extract hash from magnet")
 	}
 	hash := strings.ToLower(match[1])
 
@@ -71,24 +72,24 @@ func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (s
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/torrents", bytes.NewReader(data))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("gostorm error %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 120)]))
+		return "", false, fmt.Errorf("gostorm error %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 120)]))
 	}
 
 	// Response contains the torrent object with hash
@@ -96,10 +97,12 @@ func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (s
 		Hash string `json:"hash"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.Hash != "" {
-		return strings.ToLower(result.Hash), nil
+		return strings.ToLower(result.Hash), true, nil
 	}
 
-	return hash, nil
+	// 2xx with nothing usable in the body: the hash is the one we sent, not one the
+	// engine acknowledged.
+	return hash, false, nil
 }
 
 // GetTorrentInfo polls GoStorm until file_stats appear.
@@ -212,7 +215,7 @@ func (c *GoStormClient) postTorrents(ctx context.Context, body map[string]string
 func TitleFromFilename(filename string) string {
 	s := strings.TrimSuffix(filename, filepath.Ext(filename))
 	// Remove trailing _hash8 (8 hex chars)
-	if re := regexp.MustCompile(`_[a-f0-9]{8}$`); re.MatchString(s) {
+	if re := regexp.MustCompile(`(?i)_[a-f0-9]{8}$`); re.MatchString(s) {
 		s = s[:len(s)-9]
 	}
 	s = strings.ReplaceAll(s, "_", " ")
@@ -220,28 +223,13 @@ func TitleFromFilename(filename string) string {
 	return strings.TrimSpace(s)
 }
 
-// BuildMagnet creates a magnet URL from an info hash and optional trackers.
+// BuildMagnet and DefaultTrackers live in internal/library, shared with the
+// /api/library endpoints.
 func BuildMagnet(infoHash, name string, trackers []string) string {
-	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
-	if name != "" {
-		magnet += fmt.Sprintf("&dn=%s", url.QueryEscape(name))
-	}
-	for _, tr := range trackers {
-		magnet += fmt.Sprintf("&tr=%s", url.QueryEscape(tr))
-	}
-	return magnet
+	return library.BuildMagnet(infoHash, name, trackers)
 }
 
-// DefaultTrackers returns the fallback tracker list.
-func DefaultTrackers() []string {
-	return []string{
-		"udp://tracker.opentrackr.org:1337/announce",
-		"udp://open.stealth.si:80/announce",
-		"udp://tracker.torrent.eu.org:451/announce",
-		"udp://exodus.desync.com:6969/announce",
-		"udp://tracker.openbittorrent.com:6969/announce",
-	}
-}
+func DefaultTrackers() []string { return library.DefaultTrackers() }
 
 func min(a, b int) int {
 	if a < b {
