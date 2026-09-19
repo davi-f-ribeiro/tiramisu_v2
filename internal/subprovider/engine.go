@@ -14,13 +14,13 @@ import (
 // (SubDB via video hash, then OpenSubtitles via IMDB ID) in sequence,
 // each in its own goroutine, and sends the best result through the channel.
 type SubtitleEngine struct {
-	cfg      EngineConfig
-	subdb    *SubDBProvider
-	os       *OSProvider
-	writer   *Writer
-	rateMu   sync.Mutex
-	rateTok  int
-	rateRef  time.Time
+	cfg     EngineConfig
+	subdb   *SubDBProvider
+	os      *OSProvider
+	writer  *Writer
+	rateMu  sync.Mutex
+	rateTok int
+	rateRef time.Time
 }
 
 // NewSubtitleEngine creates a new engine. Validates mandatory config.
@@ -51,23 +51,23 @@ func NewSubtitleEngine(cfg EngineConfig) (*SubtitleEngine, error) {
 	}
 
 	return &SubtitleEngine{
-		cfg:      cfg,
-		subdb:    NewSubDBProvider(),
-		os:       NewOSProvider(cfg.OpenSubtitlesKey, cfg.OpenSubtitlesBaseURL, cfg.OpenSubtitlesUser, cfg.OpenSubtitlesPass),
-		writer:   NewWriter(cfg.FUSEMountPath),
-		rateTok:  15,
-		rateRef:  time.Now(),
+		cfg:     cfg,
+		subdb:   NewSubDBProvider(),
+		os:      NewOSProvider(cfg.OpenSubtitlesKey, cfg.OpenSubtitlesBaseURL, cfg.OpenSubtitlesUser, cfg.OpenSubtitlesPass),
+		writer:  NewWriter(cfg.FUSEMountPath),
+		rateTok: 15,
+		rateRef: time.Now(),
 	}, nil
 }
 
 // SubtitleJob represents a request to download a subtitle.
 type SubtitleJob struct {
 	// Input (provided by caller)
-	VideoPath     string        // full path to .mkv in FUSE mount
-	TorrentName   string        // torrent/filename (e.g. "Interstellar.2014.1080p.BluRay.x264.YTS")
-	VideoHash     string        // SubDB MD5 hash of first+last 64KB (may be empty)
-	ImdbID        string        // IMDB ID (e.g. "tt0816692")
-	PreferredLang LanguageTag   // user's preferred language
+	VideoPath     string      // full path to .mkv in FUSE mount
+	TorrentName   string      // torrent/filename (e.g. "Interstellar.2014.1080p.BluRay.x264.YTS")
+	VideoHash     string      // SubDB MD5 hash of first+last 64KB (may be empty)
+	ImdbID        string      // IMDB ID (e.g. "tt0816692")
+	PreferredLang LanguageTag // user's preferred language
 
 	// Output (sent through resultCh — overwritten by Run() internally)
 	ResultCh chan<- Result

@@ -335,12 +335,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v3/signalr/negotiate", h.handleSignalRNegotiate)
 	mux.HandleFunc("/api/v3/signalr", h.handleSignalRNegotiate)
 
-
 	// Endpoints adicionais que o Bazarr consulta no sync
 	mux.HandleFunc("/api/v3/command", h.handleEmptyArray)
 	mux.HandleFunc("/api/v3/health", h.handleEmptyArray)
 	mux.HandleFunc("/api/v3/diskspace", h.handleEmptyArray)
 }
+
 // handleMovieOrDetail dispatches GET /api/v3/movie (list) and GET /api/v3/movie/{id} (detail).
 func (h *Handler) handleMovieOrDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -352,7 +352,7 @@ func (h *Handler) handleMovieOrDetail(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(path, "/api/v3/movie/"):
 		rest = strings.TrimPrefix(path, "/api/v3/movie/")
-	rest = strings.TrimSuffix(rest, "/")
+		rest = strings.TrimSuffix(rest, "/")
 	case path == "/api/v3/movie":
 		rest = ""
 	case strings.HasPrefix(path, "/api/movie/"):
@@ -385,7 +385,7 @@ func (h *Handler) handleSeriesOrDetail(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(path, "/api/v3/series/"):
 		rest = strings.TrimPrefix(path, "/api/v3/series/")
-	rest = strings.TrimSuffix(rest, "/")
+		rest = strings.TrimSuffix(rest, "/")
 	case path == "/api/v3/series":
 		rest = ""
 	case strings.HasPrefix(path, "/api/series/"):
@@ -406,8 +406,6 @@ func (h *Handler) handleSeriesOrDetail(w http.ResponseWriter, r *http.Request) {
 	// Otherwise serve list
 	h.handleSeriesList(w, r)
 }
-
-
 
 // jsonResponse writes a JSON response with proper headers.
 func jsonResponse(w http.ResponseWriter, status int, v any) {

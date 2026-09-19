@@ -10,15 +10,15 @@ import (
 
 // SubtitleConfig holds the subtitle provider settings from config.json.
 type SubtitleConfig struct {
-	Enabled                bool     `json:"enabled"`
-	APIKey                 string   `json:"api_key"`          // OpenSubtitles REST API key
-	BaseURL                string   `json:"base_url"`         // OpenSubtitles base URL (optional)
-	User                   string   `json:"user"`             // OpenSubtitles username (optional)
-	Password               string   `json:"password"`         // OpenSubtitles password (optional)
-	Preferred              []string `json:"preferred_languages"`
-	MaxResults             int      `json:"max_results"`
-	OpenSubtitlesUser      string   // legacy alias
-	OpenSubtitlesPass      string   // legacy alias
+	Enabled           bool     `json:"enabled"`
+	APIKey            string   `json:"api_key"`  // OpenSubtitles REST API key
+	BaseURL           string   `json:"base_url"` // OpenSubtitles base URL (optional)
+	User              string   `json:"user"`     // OpenSubtitles username (optional)
+	Password          string   `json:"password"` // OpenSubtitles password (optional)
+	Preferred         []string `json:"preferred_languages"`
+	MaxResults        int      `json:"max_results"`
+	OpenSubtitlesUser string   // legacy alias
+	OpenSubtitlesPass string   // legacy alias
 	// FUSEMountPath is read from env var, not config.json
 	FUSEMountPath string
 }
@@ -40,7 +40,7 @@ type EngineConfig struct {
 // The FUSE mount path comes from TIRAMISU_FUSE_MOUNT_PATH env var (D5).
 func LoadSubtitleConfig() (SubtitleConfig, error) {
 	cfg := SubtitleConfig{
-		Preferred: []string{"por", "multi", "eng"},
+		Preferred:  []string{"por", "multi", "eng"},
 		MaxResults: 5,
 	}
 

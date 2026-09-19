@@ -265,10 +265,10 @@ func (h *StubsHandler) putMovieSource(w http.ResponseWriter, r *http.Request, id
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "ok",
-		"message": fmt.Sprintf("source changed for %s", stubPath),
+		"status":    "ok",
+		"message":   fmt.Sprintf("source changed for %s", stubPath),
 		"stub_path": stubPath,
-		"chosen": chosen,
+		"chosen":    chosen,
 	})
 }
 
@@ -346,7 +346,7 @@ func (h *StubsHandler) postMovieManual(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
+		"status":  "ok",
 		"message": fmt.Sprintf("manual movie stub created at %s", req.StubPath),
 	})
 }
@@ -435,13 +435,13 @@ func (h *StubsHandler) getTVCandidates(w http.ResponseWriter, r *http.Request, i
 	// TV candidates require more context (tmdbID, details)
 	// For simplicity, we return a placeholder until full integration
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"candidates":  []engines.TVCandidate{},
-		"count":       0,
-		"show_name":   req.ShowName,
-		"imdb_id":     req.ImdbID,
-		"tmdb_id":     req.TmdbID,
-		"note":        "TV candidate lookup requires tmdb details integration",
-		"message":     "use the discover endpoint or provide full show details",
+		"candidates": []engines.TVCandidate{},
+		"count":      0,
+		"show_name":  req.ShowName,
+		"imdb_id":    req.ImdbID,
+		"tmdb_id":    req.TmdbID,
+		"note":       "TV candidate lookup requires tmdb details integration",
+		"message":    "use the discover endpoint or provide full show details",
 	})
 }
 
@@ -792,8 +792,8 @@ func (h *StubsHandler) dispatchMovieAction(w http.ResponseWriter, r *http.Reques
 			stubPath, _ := findStubByPartialName(h.moviesDir, id)
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"type":     "movie",
-				"id":       id,
+				"type":      "movie",
+				"id":        id,
 				"stub_path": stubPath,
 			})
 		} else {
@@ -817,8 +817,8 @@ func (h *StubsHandler) dispatchTVAction(w http.ResponseWriter, r *http.Request, 
 			stubPath, _ := findStubByPartialName(h.tvDir, id)
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(map[string]interface{}{
-				"type":     "tv",
-				"id":       id,
+				"type":      "tv",
+				"id":        id,
 				"stub_path": stubPath,
 			})
 		} else {

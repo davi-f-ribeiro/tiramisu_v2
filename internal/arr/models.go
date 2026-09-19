@@ -2,22 +2,22 @@ package arr
 
 // SystemStatusResponse mirrors the Servarr /api/v3/system/status response.
 type SystemStatusResponse struct {
-	Version          string `json:"version"`
-	BuildTime        string `json:"buildTime"`
-	IsDebug          bool   `json:"isDebug"`
-	IsProduction     bool   `json:"isProduction"`
-	IsAdmin          bool   `json:"isAdmin"`
-	IsUserInteractive bool  `json:"isUserInteractive"`
-	OsName           string `json:"osName"`
-	OsVersion        string `json:"osVersion"`
-	IsLinux          bool   `json:"isLinux"`
-	IsDocker         bool   `json:"isDocker"`
-	Mode             string `json:"mode"`
-	Authentication   string `json:"authentication"`
-	UrlBase          string `json:"urlBase"`
-	PackageVersion   string `json:"packageVersion"`
-	AppName          string `json:"appName"`
-	InstanceName     string `json:"instanceName"`
+	Version           string `json:"version"`
+	BuildTime         string `json:"buildTime"`
+	IsDebug           bool   `json:"isDebug"`
+	IsProduction      bool   `json:"isProduction"`
+	IsAdmin           bool   `json:"isAdmin"`
+	IsUserInteractive bool   `json:"isUserInteractive"`
+	OsName            string `json:"osName"`
+	OsVersion         string `json:"osVersion"`
+	IsLinux           bool   `json:"isLinux"`
+	IsDocker          bool   `json:"isDocker"`
+	Mode              string `json:"mode"`
+	Authentication    string `json:"authentication"`
+	UrlBase           string `json:"urlBase"`
+	PackageVersion    string `json:"packageVersion"`
+	AppName           string `json:"appName"`
+	InstanceName      string `json:"instanceName"`
 }
 
 // QualityDetail mirrors Servarr's quality profile detail.
@@ -110,7 +110,7 @@ type SonarrSeries struct {
 
 // SonarrSeason mirrors Sonarr's season response.
 type SonarrSeason struct {
-	SeasonNumber int `json:"seasonNumber"`
+	SeasonNumber int  `json:"seasonNumber"`
 	Monitored    bool `json:"monitored"`
 }
 

@@ -221,11 +221,11 @@ func TestSeriesARRLifecycle(t *testing.T) {
 
 	// 2. Inserção de múltiplos episódios atrelados à série
 	episodes := []struct {
-		season int
+		season  int
 		episode int
-		title  string
-		path   string
-		size   int64
+		title   string
+		path    string
+		size    int64
 	}{
 		{1, 1, "Winter Is Coming", "/data/series/Game of Thrones/Season 1/Game of Thrones - S01E01 - Winter Is Coming.mkv", 1073741824},
 		{1, 2, "The Kingsroad", "/data/series/Game of Thrones/Season 1/Game of Thrones - S01E02 - The Kingsroad.mkv", 1073741824},
@@ -313,9 +313,9 @@ func TestARRFieldsIntegrity(t *testing.T) {
 
 	// Verificar cada campo individualmente
 	fields := []struct {
-		name  string
-		got   any
-		want  any
+		name string
+		got  any
+		want any
 	}{
 		{"tmdb_id", record.TMDBID, int64(550)},
 		{"imdb_id", record.IMDBID, "tt0944947"},
@@ -355,9 +355,9 @@ func TestARRFieldsIntegrity(t *testing.T) {
 	}
 
 	epFields := []struct {
-		name  string
-		got   any
-		want  any
+		name string
+		got  any
+		want any
 	}{
 		{"series_id", epRecord.SeriesID, seriesID},
 		{"season_number", epRecord.SeasonNumber, 1},

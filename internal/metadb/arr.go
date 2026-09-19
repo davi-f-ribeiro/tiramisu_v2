@@ -122,14 +122,14 @@ func (d *DB) GetARRMovieByPath(ctx context.Context, path string) (*ARRMovie, err
 
 // ARREpisode represents an episode row from arr_media.
 type ARREpisode struct {
-	ID           int64
-	SeriesID     int64
-	SeasonNumber int
+	ID            int64
+	SeriesID      int64
+	SeasonNumber  int
 	EpisodeNumber int
-	Title        string
-	Path         string
-	Size         int64
-	UpdatedAt    time.Time
+	Title         string
+	Path          string
+	Size          int64
+	UpdatedAt     time.Time
 }
 
 // GetARREpisodeByPath reads an episode record by its full path.

@@ -3,6 +3,7 @@ package arr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"fmt"
 
 	_ "modernc.org/sqlite"
 	"tiramisu/internal/metadb"

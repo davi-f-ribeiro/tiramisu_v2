@@ -172,11 +172,11 @@ func (p *OSProvider) Search(videoHash, imdbID, torrentName string, lang Language
 			Type  string `json:"type"`
 			ID    int64  `json:"id"`
 			Attrs struct {
-				Language string   `json:"language"`
-				Release  string   `json:"release"`
+				Language string `json:"language"`
+				Release  string `json:"release"`
 				Files    []struct {
 					ID       int64  `json:"id"`
-					FileName string   `json:"file_name"`
+					FileName string `json:"file_name"`
 				} `json:"files"`
 			} `json:"attributes"`
 		} `json:"data"`

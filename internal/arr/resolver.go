@@ -230,7 +230,7 @@ func (r *TMDBResolver) ResolveIMDbID(ctx context.Context, imdbID string) (*resol
 		title        string
 		posterPath   string
 		backdropPath string
-		lastErr error
+		lastErr      error
 	)
 
 	for attempt := 0; attempt < r.config.MaxRetry; attempt++ {

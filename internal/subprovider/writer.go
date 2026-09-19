@@ -25,9 +25,10 @@ func NewWriter(fuseMountPath string) *Writer {
 // BuildSRTPath constructs the full .srt sidecar path for a video file.
 //
 // Convention:
-//   Input:  "/mnt/tiramisu-mkv-virtual/movies/Interstellar/default.mkv"
-//   Output: "/mnt/tiramisu-mkv-virtual/movies/Interstellar/default.por.srt"
-//   Output: "/mnt/tiramisu-mkv-virtual/movies/Interstellar/default.multi.srt"
+//
+//	Input:  "/mnt/tiramisu-mkv-virtual/movies/Interstellar/default.mkv"
+//	Output: "/mnt/tiramisu-mkv-virtual/movies/Interstellar/default.por.srt"
+//	Output: "/mnt/tiramisu-mkv-virtual/movies/Interstellar/default.multi.srt"
 func (w *Writer) BuildSRTPath(videoPath string, lang LanguageTag) string {
 	// Strip .mkv extension
 	ext := filepath.Ext(videoPath)

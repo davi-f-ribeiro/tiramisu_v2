@@ -93,8 +93,6 @@ func (c *Client) FindByIMDbID(ctx context.Context, imdbID string) (int64, string
 	return 0, "", "", "", "", nil
 }
 
-
-
 // Movie is a minimal movie entry from TMDB discover/search.
 type Movie struct {
 	ID            int    `json:"id"`
