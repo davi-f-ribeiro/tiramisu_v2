@@ -204,7 +204,7 @@ func (s *DBStore) GetEpisodesBySeries(ctx context.Context, seriesID int64) ([]*S
 // GetEpisodeFilesBySeries returns all episode files for a given series ID.
 func (s *DBStore) GetEpisodeFilesBySeries(ctx context.Context, seriesID int64) ([]*SonarrEpisodeFile, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, series_id, season_number, path, size, updated_at
+		SELECT id, series_id, season_number, path, raw_title, size, updated_at
 		FROM arr_media WHERE media_type = 'episode' AND series_id = $1 ORDER BY season_number, episode_number`, seriesID)
 	if err != nil {
 		return nil, fmt.Errorf("arr: get episode files: %w", err)
@@ -214,12 +214,14 @@ func (s *DBStore) GetEpisodeFilesBySeries(ctx context.Context, seriesID int64) (
 	var files []*SonarrEpisodeFile
 	for rows.Next() {
 		var updatedAt string
+		var rawTitle string
 		var f SonarrEpisodeFile
-		if err := rows.Scan(&f.ID, &f.SeriesID, &f.SeasonNumber, &f.Path, &f.Size, &updatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.SeriesID, &f.SeasonNumber, &f.Path, &rawTitle, &f.Size, &updatedAt); err != nil {
 			return nil, fmt.Errorf("arr: scan episode file: %w", err)
 		}
 		f.DateAdded = updatedAt
 		f.RelativePath = f.Path // full path as fallback
+		populateEpisodeFileMetadata(&f, rawTitle)
 		files = append(files, &f)
 	}
 	return files, rows.Err()
@@ -650,9 +652,85 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 		// Directory path goes into m.Path.
 		m.Path = filepath.Dir(fullPath)
 	}
+	if m.MovieFile != nil {
+		populateMovieFileMetadata(m.MovieFile, m.RawTitle, m.MovieFile.Path)
+	}
 }
 
-// mountTMDBImages builds the images array from TMDb poster/backdrop paths.
+func populateMovieFileMetadata(file *RadarrMovieFile, rawTitle, path string) {
+	if file == nil {
+		return
+	}
+	sceneName := releaseSceneName(rawTitle, path)
+	file.SceneName = sceneName
+	file.ReleaseGroup = releaseGroup(sceneName)
+	file.MediaInfo = mediaInfoFromRelease(sceneName, file.Quality.Quality.Resolution)
+}
+
+func populateEpisodeFileMetadata(file *SonarrEpisodeFile, rawTitle string) {
+	if file == nil {
+		return
+	}
+	sceneName := releaseSceneName(rawTitle, file.Path)
+	file.SceneName = sceneName
+	file.ReleaseGroup = releaseGroup(sceneName)
+	file.MediaInfo = mediaInfoFromRelease(sceneName, file.Quality.Quality.Resolution)
+}
+
+func releaseSceneName(rawTitle, path string) string {
+	name := strings.TrimSpace(rawTitle)
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	name = strings.TrimSpace(name)
+	for _, ext := range []string{".mkv", ".mp4", ".avi", ".m4v", ".ts"} {
+		if strings.HasSuffix(strings.ToLower(name), ext) {
+			name = name[:len(name)-len(ext)]
+			break
+		}
+	}
+	return strings.TrimSpace(name)
+}
+
+func releaseGroup(sceneName string) string {
+	idx := strings.LastIndex(sceneName, "-")
+	if idx < 0 || idx == len(sceneName)-1 {
+		return ""
+	}
+	group := strings.TrimSpace(sceneName[idx+1:])
+	if strings.ContainsAny(group, " ._") {
+		return ""
+	}
+	return group
+}
+
+func mediaInfoFromRelease(sceneName string, resolution int) MediaInfoResource {
+	lower := strings.ToLower(sceneName)
+	if resolution <= 0 {
+		quality := parseQualityFromFilename(sceneName, sceneName)
+		resolution = quality.Quality.Resolution
+	}
+	media := MediaInfoResource{AudioCodec: "AAC", VideoCodec: "x264"}
+	if resolution > 0 {
+		media.Resolution = strconv.Itoa(resolution) + "p"
+	}
+	if resolution == 2160 {
+		media.VideoCodec = "x265"
+	}
+	if strings.Contains(lower, "x265") || strings.Contains(lower, "hevc") {
+		media.VideoCodec = "x265"
+	} else if strings.Contains(lower, "x264") || strings.Contains(lower, "h264") {
+		media.VideoCodec = "x264"
+	}
+	for _, codec := range []string{"eac3", "ddp5.1", "ddp", "ac3", "aac"} {
+		if strings.Contains(lower, codec) {
+			media.AudioCodec = codec
+			break
+		}
+	}
+	return media
+}
+
 // Always initializes v.Images to ensure the JSON field is an empty array []
 // rather than null when no images are available.
 func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
@@ -953,6 +1031,7 @@ func (h *Handler) handleEpisodeFilesBySeries(w http.ResponseWriter, r *http.Requ
 		if f.Quality.Quality.Name == "" {
 			f.Quality = parseQualityFromFilename("", f.RelativePath)
 		}
+		populateEpisodeFileMetadata(f, f.SceneName)
 	}
 	jsonResponse(w, http.StatusOK, files)
 }

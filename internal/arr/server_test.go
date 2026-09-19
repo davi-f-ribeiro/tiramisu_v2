@@ -659,6 +659,51 @@ func TestEpisodeFilesBySeries(t *testing.T) {
 	}
 }
 
+func TestFileMetadataIncludesReleaseAndMediaInfo(t *testing.T) {
+	store := newMockStore()
+	store.movies[1] = &RadarrMovie{
+		ID: 1, Title: "Reacher", RawTitle: "Reacher.S04E01.1080p.WEB.H264-CAKES",
+		Path: "/data/movies/Reacher.S04E01.1080p.WEB.H264-CAKES.mkv",
+	}
+	store.epFiles[20] = []*SonarrEpisodeFile{{
+		ID: 2, SeriesID: 20, SeasonNumber: 4,
+		Path: "/data/shows/Reacher/Reacher.S04E01.2160p.WEB.x265-CAKES.mkv",
+	}}
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	movieResponse := httptest.NewRecorder()
+	mux.ServeHTTP(movieResponse, httptest.NewRequest(http.MethodGet, "/api/v3/movie", nil))
+	if movieResponse.Code != http.StatusOK {
+		t.Fatalf("movie status = %d", movieResponse.Code)
+	}
+	var movies []*RadarrMovie
+	if err := json.Unmarshal(movieResponse.Body.Bytes(), &movies); err != nil {
+		t.Fatal(err)
+	}
+	info := movies[0].MovieFile
+	if info.SceneName != "Reacher.S04E01.1080p.WEB.H264-CAKES" || info.ReleaseGroup != "CAKES" {
+		t.Fatalf("movie release metadata = %+v", info)
+	}
+	if info.MediaInfo.VideoCodec != "x264" || info.MediaInfo.AudioCodec != "AAC" || info.MediaInfo.Resolution != "1080p" {
+		t.Fatalf("movie media info = %+v", info.MediaInfo)
+	}
+
+	episodeResponse := httptest.NewRecorder()
+	mux.ServeHTTP(episodeResponse, httptest.NewRequest(http.MethodGet, "/api/v3/episodefile?seriesId=20", nil))
+	if episodeResponse.Code != http.StatusOK {
+		t.Fatalf("episode status = %d", episodeResponse.Code)
+	}
+	var episodes []*SonarrEpisodeFile
+	if err := json.Unmarshal(episodeResponse.Body.Bytes(), &episodes); err != nil {
+		t.Fatal(err)
+	}
+	if episodes[0].ReleaseGroup != "CAKES" || episodes[0].MediaInfo.VideoCodec != "x265" || episodes[0].MediaInfo.Resolution != "2160p" {
+		t.Fatalf("episode metadata = %+v", episodes[0])
+	}
+}
+
 func TestEpisodeFilesEmpty(t *testing.T) {
 	h := newTestHandler()
 	mux := http.NewServeMux()

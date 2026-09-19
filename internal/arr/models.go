@@ -43,14 +43,28 @@ type QualityModel struct {
 
 // RadarrMovieFile mirrors Radarr's movie file response.
 type RadarrMovieFile struct {
-	ID               int64        `json:"id"`
-	MovieID          int64        `json:"movieId"`
-	RelativePath     string       `json:"relativePath"`
-	Path             string       `json:"path"`
-	Size             int64        `json:"size"`
-	DateAdded        string       `json:"dateAdded"`
-	Quality          QualityModel `json:"quality"`
-	QualityCutoffNot bool         `json:"qualityCutoffNotMet"`
+	ID               int64             `json:"id"`
+	MovieID          int64             `json:"movieId"`
+	RelativePath     string            `json:"relativePath"`
+	Path             string            `json:"path"`
+	Size             int64             `json:"size"`
+	DateAdded        string            `json:"dateAdded"`
+	SceneName        string            `json:"sceneName"`
+	ReleaseGroup     string            `json:"releaseGroup"`
+	MediaInfo        MediaInfoResource `json:"mediaInfo"`
+	Quality          QualityModel      `json:"quality"`
+	QualityCutoffNot bool              `json:"qualityCutoffNotMet"`
+}
+
+// MediaInfoResource mirrors the media analysis block expected by Servarr clients.
+type MediaInfoResource struct {
+	AudioCodec    string  `json:"audioCodec"`
+	AudioChannels float64 `json:"audioChannels"`
+	VideoCodec    string  `json:"videoCodec"`
+	VideoProfile  string  `json:"videoProfile"`
+	Resolution    string  `json:"resolution"`
+	RunTime       string  `json:"runTime"`
+	ScanType      string  `json:"scanType"`
 }
 
 // AlternativeTitle mirrors Servarr's alternative title response.
@@ -142,12 +156,15 @@ type SonarrEpisode struct {
 
 // SonarrEpisodeFile mirrors Sonarr's episode file response.
 type SonarrEpisodeFile struct {
-	ID           int64        `json:"id"`
-	SeriesID     int64        `json:"seriesId"`
-	SeasonNumber int          `json:"seasonNumber"`
-	RelativePath string       `json:"relativePath"`
-	Path         string       `json:"path"`
-	Size         int64        `json:"size"`
-	DateAdded    string       `json:"dateAdded"`
-	Quality      QualityModel `json:"quality"`
+	ID           int64             `json:"id"`
+	SeriesID     int64             `json:"seriesId"`
+	SeasonNumber int               `json:"seasonNumber"`
+	RelativePath string            `json:"relativePath"`
+	Path         string            `json:"path"`
+	Size         int64             `json:"size"`
+	DateAdded    string            `json:"dateAdded"`
+	SceneName    string            `json:"sceneName"`
+	ReleaseGroup string            `json:"releaseGroup"`
+	MediaInfo    MediaInfoResource `json:"mediaInfo"`
+	Quality      QualityModel      `json:"quality"`
 }
