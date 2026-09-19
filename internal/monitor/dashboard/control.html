@@ -1649,7 +1649,7 @@
                         <div class="bazarr-card-header">
                             <div>
                                 <div class="bazarr-card-title">Bazarr Virtual Subtitles</div>
-                                <div class="bazarr-card-description">Configuração centralizada para stubs virtuais <code>.srt</code> pt-BR no FUSE. Use a porta padrão 6767.</div>
+                                <div class="bazarr-card-description">Configuração centralizada para stubs virtuais <code>.srt</code> pt-BR no FUSE. Informe a URL real do Bazarr quando habilitar.</div>
                             </div>
                             <span id="bazarrStatusBadge" class="bazarr-status-badge">● Não testado</span>
                         </div>
@@ -1664,7 +1664,7 @@
                             </div>
                             <div class="bazarr-field">
                                 <label for="bazarrUrl">URL do Bazarr</label>
-                                <input id="bazarrUrl" form="tiramisu-form" type="url" placeholder="http://127.0.0.1:6767">
+                                <input id="bazarrUrl" form="tiramisu-form" type="url" placeholder="Informe a URL do Bazarr">
                             </div>
                             <div class="bazarr-field">
                                 <label for="bazarrApiKey">API Key</label>
@@ -3137,7 +3137,7 @@
                 const cfg = await res.json();
                 if (!res.ok) throw new Error(cfg.error || 'Falha ao carregar Bazarr');
                 document.getElementById('bazarrEnabled').value = String(!!cfg.enabled);
-                document.getElementById('bazarrUrl').value = cfg.url || 'http://127.0.0.1:6767';
+                document.getElementById('bazarrUrl').value = cfg.url || '';
                 document.getElementById('bazarrTimeout').value = cfg.timeout_seconds || 30;
                 document.getElementById('bazarrMaxResults').value = cfg.max_results || 5;
                 document.getElementById('bazarrApiKey').value = '';

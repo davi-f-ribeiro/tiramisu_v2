@@ -16,20 +16,23 @@ type RuntimeProvider struct {
 
 // NewRuntimeProvider creates a provider from config and wraps it for hot reloads.
 func NewRuntimeProvider(cfg cfgpkg.BazarrConfig) *RuntimeProvider {
-	r := &RuntimeProvider{}
-	r.Set(NewSubtitleProvider(cfg))
-	return r
+	client := subprovider.NewBazarrClient(toSubproviderConfig(cfg))
+	return &RuntimeProvider{provider: client}
 }
 
 // NewSubtitleProvider builds the concrete Bazarr provider from application config.
 func NewSubtitleProvider(cfg cfgpkg.BazarrConfig) subprovider.SubtitleProvider {
-	return subprovider.NewBazarrClient(subprovider.BazarrConfig{
+	return subprovider.NewBazarrClient(toSubproviderConfig(cfg))
+}
+
+func toSubproviderConfig(cfg cfgpkg.BazarrConfig) subprovider.BazarrConfig {
+	return subprovider.BazarrConfig{
 		Enabled:        cfg.Enabled,
 		URL:            cfg.URL,
 		APIKey:         cfg.APIKey,
 		TimeoutSeconds: cfg.TimeoutSeconds,
 		MaxResults:     cfg.MaxResults,
-	})
+	}
 }
 
 // Set replaces the active provider.
@@ -37,6 +40,21 @@ func (r *RuntimeProvider) Set(p subprovider.SubtitleProvider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.provider = p
+}
+
+// UpdateConfig hot-reloads the active provider in place when possible.
+func (r *RuntimeProvider) UpdateConfig(cfg subprovider.BazarrConfig) {
+	if r == nil {
+		return
+	}
+	r.mu.RLock()
+	p := r.provider
+	r.mu.RUnlock()
+	if p != nil {
+		p.UpdateConfig(cfg)
+		return
+	}
+	r.Set(subprovider.NewBazarrClient(cfg))
 }
 
 // IsEnabled reports whether the active provider is configured and enabled.

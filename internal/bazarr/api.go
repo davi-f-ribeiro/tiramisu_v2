@@ -92,6 +92,13 @@ func RegisterConfigAPI(mux *http.ServeMux, opts ConfigAPIOptions) {
 				writeJSONError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			if cfg.Bazarr.Enabled {
+				resp := testBazarrConnection(r.Context(), cfg.Bazarr)
+				if !resp.OK {
+					writeJSONError(w, http.StatusBadGateway, resp.Message)
+					return
+				}
+			}
 			if err := cfg.Save(); err != nil {
 				writeJSONError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -100,7 +107,7 @@ func RegisterConfigAPI(mux *http.ServeMux, opts ConfigAPIOptions) {
 				opts.Store(&cfg)
 			}
 			if opts.Runtime != nil {
-				opts.Runtime.Set(NewSubtitleProvider(cfg.Bazarr))
+				opts.Runtime.UpdateConfig(toSubproviderConfig(cfg.Bazarr))
 			}
 			if opts.After != nil {
 				opts.After(cfg)
@@ -132,16 +139,6 @@ func RegisterConfigAPI(mux *http.ServeMux, opts ConfigAPIOptions) {
 func normalizeBazarrConfig(cfg *cfgpkg.BazarrConfig) error {
 	cfg.URL = strings.TrimRight(strings.TrimSpace(cfg.URL), "/")
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
-	if cfg.Enabled && cfg.URL == "" {
-		return fmt.Errorf("bazarr url is required when enabled")
-	}
-	if cfg.URL == "" {
-		cfg.URL = "http://127.0.0.1:6767"
-	}
-	u, err := url.Parse(cfg.URL)
-	if err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return fmt.Errorf("bazarr url must be a valid http(s) URL")
-	}
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = 30
 	}
@@ -154,12 +151,25 @@ func normalizeBazarrConfig(cfg *cfgpkg.BazarrConfig) error {
 	if cfg.MaxResults > 50 {
 		cfg.MaxResults = 50
 	}
+	if !cfg.Enabled && cfg.URL == "" {
+		return nil
+	}
+	if cfg.Enabled && cfg.URL == "" {
+		return fmt.Errorf("bazarr url is required when enabled")
+	}
+	u, err := url.Parse(cfg.URL)
+	if err != nil || u.Scheme == "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("bazarr url must be a valid http(s) URL")
+	}
 	return nil
 }
 
 func testBazarrConnection(ctx context.Context, cfg cfgpkg.BazarrConfig) testResponse {
 	if err := normalizeBazarrConfig(&cfg); err != nil {
 		return testResponse{OK: false, Message: err.Error(), URL: cfg.URL}
+	}
+	if !cfg.Enabled || cfg.URL == "" {
+		return testResponse{OK: false, Message: "bazarr disabled or url is empty", URL: cfg.URL}
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()

@@ -57,10 +57,8 @@ func (s *DBStore) GetMovies(ctx context.Context) ([]*RadarrMovie, error) {
 		m.HasFile = true
 		m.IsAvailable = true
 		m.Monitored = true
-		m.AlternativeTitles = []AlternativeTitle{}
-		m.Genres = []string{}
-		m.Tags = []int{}
-		m.Images = []MediaImage{}
+		ensureRadarrMovieBazarrArrays(&m)
+		m.Images = make([]MediaImage, 0)
 		movies = append(movies, &m)
 	}
 	return movies, rows.Err()
@@ -81,10 +79,8 @@ func (s *DBStore) GetMovieByID(ctx context.Context, id int64) (*RadarrMovie, err
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
-	m.AlternativeTitles = []AlternativeTitle{}
-	m.Genres = []string{}
-	m.Tags = []int{}
-	m.Images = []MediaImage{}
+	ensureRadarrMovieBazarrArrays(&m)
+	m.Images = make([]MediaImage, 0)
 	return &m, nil
 }
 
@@ -151,11 +147,11 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 			return nil, fmt.Errorf("arr: scan series: %w", err)
 		}
 		s.Monitored = true
-		s.AlternateTitles = []AlternativeTitle{}
-		s.AlternativeTitles = []AlternativeTitle{}
-		s.Genres = []string{}
-		s.Tags = []int{}
-		s.Images = []MediaImage{}
+		s.AlternateTitles = make([]AlternativeTitle, 0)
+		s.AlternativeTitles = make([]AlternativeTitle, 0)
+		s.Genres = make([]string, 0)
+		s.Tags = make([]int, 0)
+		s.Images = make([]MediaImage, 0)
 		series = append(series, &s)
 	}
 	return series, rows.Err()
@@ -173,11 +169,8 @@ func (s *DBStore) GetSeriesByID(ctx context.Context, id int64) (*SonarrSeries, e
 		return nil, err
 	}
 	series.Monitored = true
-	series.AlternateTitles = []AlternativeTitle{}
-	series.AlternativeTitles = []AlternativeTitle{}
-	series.Genres = []string{}
-	series.Tags = []int{}
-	series.Images = []MediaImage{}
+	ensureSonarrSeriesBazarrArrays(&series)
+	series.Images = make([]MediaImage, 0)
 	series.SeasonCount = 1
 	series.Seasons = []SonarrSeason{{SeasonNumber: 1, Monitored: true}}
 	return &series, nil
@@ -595,9 +588,7 @@ func (h *Handler) populateMovieFields(ctx context.Context, m *RadarrMovie) {
 	m.HasFile = true
 	m.IsAvailable = true
 	m.Monitored = true
-	m.AlternativeTitles = []AlternativeTitle{}
-	m.Genres = []string{}
-	m.Tags = []int{}
+	ensureRadarrMovieBazarrArrays(m)
 
 	// JIT resolution: if tmdbId is zero and we have an imdbId, try to
 	// resolve it synchronously from the TMDb API (with in-memory cache).
@@ -669,15 +660,7 @@ func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
 	case *RadarrMovie:
 		// Bazarr exige arrays, nunca null. Inicializa aqui por garantia
 		// em qualquer código-fonte (DB, JIT, stub).
-		if v.AlternativeTitles == nil {
-			v.AlternativeTitles = []AlternativeTitle{}
-		}
-		if v.Genres == nil {
-			v.Genres = []string{}
-		}
-		if v.Tags == nil {
-			v.Tags = []int{}
-		}
+		ensureRadarrMovieBazarrArrays(v)
 		images := make([]MediaImage, 0, 2)
 		if posterPath != "" {
 			images = append(images, MediaImage{
@@ -716,6 +699,32 @@ func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
 	}
 }
 
+func ensureRadarrMovieBazarrArrays(m *RadarrMovie) {
+	if m == nil {
+		return
+	}
+	if m.AlternateTitles == nil {
+		if m.AlternativeTitles != nil {
+			m.AlternateTitles = m.AlternativeTitles
+		} else {
+			m.AlternateTitles = make([]AlternativeTitle, 0)
+		}
+	}
+	if m.AlternativeTitles == nil {
+		if m.AlternateTitles != nil {
+			m.AlternativeTitles = m.AlternateTitles
+		} else {
+			m.AlternativeTitles = make([]AlternativeTitle, 0)
+		}
+	}
+	if m.Genres == nil {
+		m.Genres = make([]string, 0)
+	}
+	if m.Tags == nil {
+		m.Tags = make([]int, 0)
+	}
+}
+
 func ensureSonarrSeriesBazarrArrays(s *SonarrSeries) {
 	if s == nil {
 		return
@@ -724,24 +733,24 @@ func ensureSonarrSeriesBazarrArrays(s *SonarrSeries) {
 		if s.AlternativeTitles != nil {
 			s.AlternateTitles = s.AlternativeTitles
 		} else {
-			s.AlternateTitles = []AlternativeTitle{}
+			s.AlternateTitles = make([]AlternativeTitle, 0)
 		}
 	}
 	if s.AlternativeTitles == nil {
 		if s.AlternateTitles != nil {
 			s.AlternativeTitles = s.AlternateTitles
 		} else {
-			s.AlternativeTitles = []AlternativeTitle{}
+			s.AlternativeTitles = make([]AlternativeTitle, 0)
 		}
 	}
 	if s.Genres == nil {
-		s.Genres = []string{}
+		s.Genres = make([]string, 0)
 	}
 	if s.Tags == nil {
-		s.Tags = []int{}
+		s.Tags = make([]int, 0)
 	}
 	if s.Seasons == nil {
-		s.Seasons = []SonarrSeason{}
+		s.Seasons = make([]SonarrSeason, 0)
 	}
 }
 

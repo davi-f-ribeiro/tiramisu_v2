@@ -91,3 +91,61 @@ func TestBazarrSearchRejectsHTMLFallback(t *testing.T) {
 		t.Fatalf("expected explicit HTML fallback error, got: %v", err)
 	}
 }
+
+func TestBazarrDisabledOrEmptyURLReturnsControlledErrorWithoutRequest(t *testing.T) {
+	requested := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = true
+		t.Fatalf("disabled client must not issue HTTP request: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	for _, cfg := range []BazarrConfig{
+		{Enabled: false, URL: srv.URL},
+		{Enabled: true, URL: ""},
+	} {
+		client := NewBazarrClient(cfg)
+		if client.IsEnabled() {
+			t.Fatalf("client should be disabled for cfg=%+v", cfg)
+		}
+		_, err := client.Search(context.Background(), 123, "Movie", "pt-BR")
+		if err == nil || !strings.Contains(err.Error(), "bazarr disabled") {
+			t.Fatalf("Search error = %v, want controlled disabled error", err)
+		}
+		if err := client.Download(context.Background(), "sub-1", t.TempDir()+"/sub.srt"); err == nil || !strings.Contains(err.Error(), "bazarr disabled") {
+			t.Fatalf("Download error = %v, want controlled disabled error", err)
+		}
+	}
+	if requested {
+		t.Fatal("disabled client unexpectedly issued an HTTP request")
+	}
+}
+
+func TestBazarrUpdateConfigHotReloadsSameClient(t *testing.T) {
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.String())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"sub-hot","title":"Movie","language":"pt-BR"}]`))
+	}))
+	defer srv.Close()
+
+	client := NewBazarrClient(BazarrConfig{Enabled: false})
+	if client.IsEnabled() {
+		t.Fatal("client should start disabled")
+	}
+	client.UpdateConfig(BazarrConfig{Enabled: true, URL: srv.URL, MaxResults: 5})
+	if !client.IsEnabled() {
+		t.Fatal("client should be enabled after UpdateConfig")
+	}
+	subs, err := client.Search(context.Background(), 123, "Movie", "pt-BR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(subs) != 1 || subs[0].ID != "sub-hot" {
+		t.Fatalf("unexpected subtitles after hot reload: %#v", subs)
+	}
+	if len(requested) != 1 || requested[0] != "/api/providers/movies?radarrid=123" {
+		t.Fatalf("unexpected requests after hot reload: %#v", requested)
+	}
+}

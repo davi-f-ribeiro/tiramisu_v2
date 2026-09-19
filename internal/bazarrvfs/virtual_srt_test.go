@@ -28,6 +28,8 @@ func (m *mockSubtitleProvider) Download(ctx context.Context, subtitleID string, 
 
 func (m *mockSubtitleProvider) IsEnabled() bool { return m.enabled }
 
+func (m *mockSubtitleProvider) UpdateConfig(subprovider.BazarrConfig) {}
+
 func TestEntriesSynthesizesSubtitleNode(t *testing.T) {
 	ClearCache()
 	dir := t.TempDir()

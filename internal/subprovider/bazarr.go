@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type BazarrConfig struct {
 
 // BazarrClient is a small HTTP client for Bazarr-compatible APIs.
 type BazarrClient struct {
+	mu   sync.RWMutex
 	cfg  BazarrConfig
 	http *http.Client
 }
@@ -32,6 +34,12 @@ var _ SubtitleProvider = (*BazarrClient)(nil)
 
 // NewBazarrClient creates a Bazarr client. Empty timeout/max values get safe defaults.
 func NewBazarrClient(cfg BazarrConfig) *BazarrClient {
+	c := &BazarrClient{}
+	c.UpdateConfig(cfg)
+	return c
+}
+
+func normalizeBazarrClientConfig(cfg BazarrConfig) BazarrConfig {
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = 30
 	}
@@ -39,17 +47,46 @@ func NewBazarrClient(cfg BazarrConfig) *BazarrClient {
 		cfg.MaxResults = 5
 	}
 	cfg.URL = strings.TrimRight(strings.TrimSpace(cfg.URL), "/")
-	return &BazarrClient{cfg: cfg, http: &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second}}
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	return cfg
 }
 
-func (c *BazarrClient) IsEnabled() bool { return c != nil && c.cfg.Enabled && c.cfg.URL != "" }
+func (c *BazarrClient) UpdateConfig(cfg BazarrConfig) {
+	if c == nil {
+		return
+	}
+	cfg = normalizeBazarrClientConfig(cfg)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg = cfg
+	c.http = &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second}
+}
+
+func (c *BazarrClient) snapshot() (BazarrConfig, *http.Client) {
+	if c == nil {
+		return BazarrConfig{}, nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cfg, c.http
+}
+
+func (c *BazarrClient) IsEnabled() bool {
+	cfg, _ := c.snapshot()
+	return cfg.Enabled && cfg.URL != ""
+}
+
+func (c *BazarrClient) disabledError() error {
+	return fmt.Errorf("bazarr disabled: enabled=false or url is empty")
+}
 
 // Search implements SubtitleProvider. mediaID is a Bazarr/Radarr movie id or a
 // Bazarr/Sonarr episode id. If mediaID is missing and title contains an IMDb id,
 // the client resolves the movie id from /api/movies before searching providers.
 func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error) {
-	if !c.IsEnabled() {
-		return nil, nil
+	cfg, _ := c.snapshot()
+	if !cfg.Enabled || cfg.URL == "" {
+		return nil, c.disabledError()
 	}
 	var lastErr error
 	if mediaID > 0 {
@@ -63,7 +100,7 @@ func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, la
 				continue
 			}
 			if len(subs) > 0 {
-				return limitCandidates(subs, c.cfg.MaxResults), nil
+				return limitCandidates(subs, cfg.MaxResults), nil
 			}
 		}
 	}
@@ -76,7 +113,7 @@ func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, la
 			if err != nil {
 				lastErr = err
 			} else if len(subs) > 0 {
-				return limitCandidates(subs, c.cfg.MaxResults), nil
+				return limitCandidates(subs, cfg.MaxResults), nil
 			}
 		}
 	}
@@ -92,8 +129,9 @@ func (c *BazarrClient) SearchByIMDb(ctx context.Context, imdbID, language string
 }
 
 func (c *BazarrClient) Download(ctx context.Context, subtitleID string, destPath string) error {
-	if !c.IsEnabled() {
-		return fmt.Errorf("bazarr disabled")
+	cfg, _ := c.snapshot()
+	if !cfg.Enabled || cfg.URL == "" {
+		return c.disabledError()
 	}
 	if subtitleID == "" {
 		return fmt.Errorf("missing subtitle id")
@@ -149,18 +187,25 @@ func (c *BazarrClient) resolveMovieRadarrID(ctx context.Context, imdbID string) 
 }
 
 func (c *BazarrClient) getBytes(ctx context.Context, path string, requireJSON bool) ([]byte, error) {
+	cfg, httpClient := c.snapshot()
+	if !cfg.Enabled || cfg.URL == "" {
+		return nil, c.disabledError()
+	}
 	u := path
 	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-		u = c.cfg.URL + path
+		u = cfg.URL + path
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	if c.cfg.APIKey != "" {
-		req.Header.Set("X-API-KEY", c.cfg.APIKey)
+	if cfg.APIKey != "" {
+		req.Header.Set("X-API-KEY", cfg.APIKey)
 	}
-	resp, err := c.http.Do(req)
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

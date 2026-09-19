@@ -515,7 +515,7 @@ func TestRadarrMoviePayloadUsesEmptyArraysForBazarrCollections(t *testing.T) {
 				obj = payload.(map[string]any)
 			}
 
-			for _, key := range []string{"alternativeTitles", "genres", "tags"} {
+			for _, key := range []string{"alternateTitles", "alternativeTitles", "genres", "tags"} {
 				v, ok := obj[key]
 				if !ok {
 					t.Fatalf("%s key missing in %s payload: %s", key, tc.name, w.Body.String())

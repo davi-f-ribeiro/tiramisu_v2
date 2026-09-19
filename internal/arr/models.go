@@ -78,6 +78,7 @@ type RadarrMovie struct {
 	TmdbID            int64              `json:"tmdbId"`
 	Size              int64              `json:"size,omitempty"`
 	MovieFile         *RadarrMovieFile   `json:"movieFile,omitempty"`
+	AlternateTitles   []AlternativeTitle `json:"alternateTitles"`
 	AlternativeTitles []AlternativeTitle `json:"alternativeTitles"`
 	Genres            []string           `json:"genres"`
 	Tags              []int              `json:"tags"`

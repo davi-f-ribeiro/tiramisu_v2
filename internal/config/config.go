@@ -300,16 +300,43 @@ type Config struct {
 	StateDBPath   string `json:"state_db_path"`   // default: <STATE>/tiramisu.db
 }
 
-// Save persists the current configuration to config.json
+// Save persists the current configuration to config.json with a synchronous flush.
 func (c *Config) Save() error {
-	// 1. Marshal config to JSON
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-
-	// 2. Write to file
-	return os.WriteFile(c.ConfigPath, data, 0644)
+	if err := os.MkdirAll(filepath.Dir(c.ConfigPath), 0755); err != nil {
+		return err
+	}
+	tmp := c.ConfigPath + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, c.ConfigPath); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if dir, err := os.Open(filepath.Dir(c.ConfigPath)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 // DefaultBlockListURL is the list the filter below is written for. It is a real default,
@@ -378,7 +405,7 @@ func LoadConfig() Config {
 		BlockListEnabled: false,
 		Bazarr: BazarrConfig{
 			Enabled:        false,
-			URL:            "http://127.0.0.1:6767",
+			URL:            "",
 			TimeoutSeconds: 30,
 			MaxResults:     5,
 		},

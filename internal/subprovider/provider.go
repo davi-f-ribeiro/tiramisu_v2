@@ -42,6 +42,7 @@ type SubtitleProvider interface {
 	Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error)
 	Download(ctx context.Context, subtitleID string, destPath string) error
 	IsEnabled() bool
+	UpdateConfig(BazarrConfig)
 }
 
 // Result is what the Engine returns through its channel after searching + downloading.
