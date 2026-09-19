@@ -100,6 +100,7 @@ type SonarrSeries struct {
 	ImdbID            string             `json:"imdbId"`
 	TmdbID            int64              `json:"tmdbId"`
 	Seasons           []SonarrSeason     `json:"seasons"`
+	AlternateTitles   []AlternativeTitle `json:"alternateTitles"`
 	AlternativeTitles []AlternativeTitle `json:"alternativeTitles"`
 	Genres            []string           `json:"genres"`
 	Tags              []int              `json:"tags"`

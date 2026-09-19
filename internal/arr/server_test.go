@@ -426,6 +426,112 @@ func TestSeriesDetail404(t *testing.T) {
 	}
 }
 
+func TestSonarrSeriesPayloadAlwaysIncludesAlternateTitlesArray(t *testing.T) {
+	store := newMockStore()
+	store.series[7] = &SonarrSeries{ID: 7, Title: "The Series", TvdbID: 777, Path: "/data/shows/series"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "list", path: "/api/v3/series"},
+		{name: "detail", path: "/api/v3/series/7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", tc.path, nil)
+			mux.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+
+			var payload any
+			if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("json decode: %v", err)
+			}
+			var obj map[string]any
+			if arr, ok := payload.([]any); ok {
+				if len(arr) != 1 {
+					t.Fatalf("series count = %d, want 1", len(arr))
+				}
+				obj = arr[0].(map[string]any)
+			} else {
+				obj = payload.(map[string]any)
+			}
+
+			v, ok := obj["alternateTitles"]
+			if !ok {
+				t.Fatalf("alternateTitles key missing in %s payload: %s", tc.name, w.Body.String())
+			}
+			alt, ok := v.([]any)
+			if !ok {
+				t.Fatalf("alternateTitles = %T, want JSON array; body=%s", v, w.Body.String())
+			}
+			if len(alt) != 0 {
+				t.Fatalf("alternateTitles len = %d, want 0", len(alt))
+			}
+		})
+	}
+}
+
+func TestRadarrMoviePayloadUsesEmptyArraysForBazarrCollections(t *testing.T) {
+	store := newMockStore()
+	store.movies[42] = &RadarrMovie{ID: 42, Title: "The Movie", Year: 2019, Path: "/data/movies/the-movie"}
+
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{name: "list", path: "/api/v3/movie"},
+		{name: "detail", path: "/api/v3/movie/42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", tc.path, nil)
+			mux.ServeHTTP(w, r)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+
+			var payload any
+			if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("json decode: %v", err)
+			}
+			var obj map[string]any
+			if arr, ok := payload.([]any); ok {
+				if len(arr) != 1 {
+					t.Fatalf("movie count = %d, want 1", len(arr))
+				}
+				obj = arr[0].(map[string]any)
+			} else {
+				obj = payload.(map[string]any)
+			}
+
+			for _, key := range []string{"alternativeTitles", "genres", "tags"} {
+				v, ok := obj[key]
+				if !ok {
+					t.Fatalf("%s key missing in %s payload: %s", key, tc.name, w.Body.String())
+				}
+				arr, ok := v.([]any)
+				if !ok {
+					t.Fatalf("%s = %T, want JSON array; body=%s", key, v, w.Body.String())
+				}
+				if len(arr) != 0 {
+					t.Fatalf("%s len = %d, want 0", key, len(arr))
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 5. Episodes filtered by seriesId
 // ---------------------------------------------------------------------------

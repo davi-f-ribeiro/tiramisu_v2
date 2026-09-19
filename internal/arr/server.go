@@ -151,6 +151,7 @@ func (s *DBStore) GetSeries(ctx context.Context) ([]*SonarrSeries, error) {
 			return nil, fmt.Errorf("arr: scan series: %w", err)
 		}
 		s.Monitored = true
+		s.AlternateTitles = []AlternativeTitle{}
 		s.AlternativeTitles = []AlternativeTitle{}
 		s.Genres = []string{}
 		s.Tags = []int{}
@@ -172,6 +173,7 @@ func (s *DBStore) GetSeriesByID(ctx context.Context, id int64) (*SonarrSeries, e
 		return nil, err
 	}
 	series.Monitored = true
+	series.AlternateTitles = []AlternativeTitle{}
 	series.AlternativeTitles = []AlternativeTitle{}
 	series.Genres = []string{}
 	series.Tags = []int{}
@@ -694,18 +696,7 @@ func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
 		v.Images = images
 	case *SonarrSeries:
 		// Bazarr exige arrays, nunca null. Inicializa aqui por garantia.
-		if v.AlternativeTitles == nil {
-			v.AlternativeTitles = []AlternativeTitle{}
-		}
-		if v.Genres == nil {
-			v.Genres = []string{}
-		}
-		if v.Tags == nil {
-			v.Tags = []int{}
-		}
-		if v.Seasons == nil {
-			v.Seasons = []SonarrSeason{}
-		}
+		ensureSonarrSeriesBazarrArrays(v)
 		images := make([]MediaImage, 0, 2)
 		if posterPath != "" {
 			images = append(images, MediaImage{
@@ -722,6 +713,35 @@ func mountTMDBImages(m interface{}, posterPath, backdropPath string) {
 			})
 		}
 		v.Images = images
+	}
+}
+
+func ensureSonarrSeriesBazarrArrays(s *SonarrSeries) {
+	if s == nil {
+		return
+	}
+	if s.AlternateTitles == nil {
+		if s.AlternativeTitles != nil {
+			s.AlternateTitles = s.AlternativeTitles
+		} else {
+			s.AlternateTitles = []AlternativeTitle{}
+		}
+	}
+	if s.AlternativeTitles == nil {
+		if s.AlternateTitles != nil {
+			s.AlternativeTitles = s.AlternateTitles
+		} else {
+			s.AlternativeTitles = []AlternativeTitle{}
+		}
+	}
+	if s.Genres == nil {
+		s.Genres = []string{}
+	}
+	if s.Tags == nil {
+		s.Tags = []int{}
+	}
+	if s.Seasons == nil {
+		s.Seasons = []SonarrSeason{}
 	}
 }
 
@@ -778,10 +798,8 @@ func (h *Handler) handleSeriesList(w http.ResponseWriter, r *http.Request) {
 	// JIT resolution: if tvdbId is zero and we have an imdbId, try to
 	// resolve it synchronously from the TMDb API (with in-memory cache).
 	for _, s := range series {
+		ensureSonarrSeriesBazarrArrays(s)
 		// Ensure all arrays are never null (Bazarr requires [] not None)
-		s.AlternativeTitles = []AlternativeTitle{}
-		s.Genres = []string{}
-		s.Tags = []int{}
 		s.SeasonCount = 1
 		s.Seasons = []SonarrSeason{{SeasonNumber: 1, Monitored: true}}
 		if s.TvdbID <= 0 && s.ImdbID != "" && h.resolver != nil {
