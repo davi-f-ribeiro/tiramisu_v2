@@ -705,30 +705,15 @@ func releaseGroup(sceneName string) string {
 }
 
 func mediaInfoFromRelease(sceneName string, resolution int) MediaInfoResource {
-	lower := strings.ToLower(sceneName)
-	if resolution <= 0 {
-		quality := parseQualityFromFilename(sceneName, sceneName)
-		resolution = quality.Quality.Resolution
-	}
-	media := MediaInfoResource{AudioCodec: "AAC", VideoCodec: "x264"}
-	if resolution > 0 {
-		media.Resolution = strconv.Itoa(resolution) + "p"
-	}
+	resStr := ""
 	if resolution == 2160 {
-		media.VideoCodec = "x265"
+		resStr = "2160p"
+	} else if resolution == 1080 {
+		resStr = "1080p"
+	} else if resolution == 720 {
+		resStr = "720p"
 	}
-	if strings.Contains(lower, "x265") || strings.Contains(lower, "hevc") {
-		media.VideoCodec = "x265"
-	} else if strings.Contains(lower, "x264") || strings.Contains(lower, "h264") {
-		media.VideoCodec = "x264"
-	}
-	for _, codec := range []string{"eac3", "ddp5.1", "ddp", "ac3", "aac"} {
-		if strings.Contains(lower, codec) {
-			media.AudioCodec = codec
-			break
-		}
-	}
-	return media
+	return ParseMediaInfoFromName(sceneName, resStr)
 }
 
 // Always initializes v.Images to ensure the JSON field is an empty array []
