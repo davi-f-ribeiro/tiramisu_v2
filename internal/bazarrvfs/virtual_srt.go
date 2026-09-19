@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,7 +16,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"tiramisu/internal/vfs"
+	"tiramisu/internal/metadb"
 )
 
 const VirtualLanguage = "pt-BR"
@@ -165,94 +166,134 @@ func ClearCache() {
 }
 
 func Entries(dir string, startOffset int, opts Options) []fuse.DirEntry {
-	provider := opts.Provider
-	if provider == nil || !provider.IsEnabled() {
+	if opts.Provider == nil || !opts.Provider.IsEnabled() {
 		return nil
 	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		logf(opts, "[BAZARR] readdir source failed for %s: %v", dir, err)
-		return nil
-	}
-
 	var out []fuse.DirEntry
-	seen := map[string]bool{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".mkv") {
-			continue
+	virtualSRTCache.Range(func(key, value any) bool {
+		virtPath, ok := key.(string)
+		if !ok || filepath.Dir(virtPath) != dir {
+			return true
 		}
-		videoPath := filepath.Join(dir, e.Name())
-		meta, err := vfs.ReadMetadataFromFile(videoPath)
-		if err != nil || (meta.ImdbID == "" && meta.RadarrID == 0 && meta.SonarrEpisodeID == 0) {
-			continue
+		entry, ok := value.(*Subtitle)
+		if !ok || entry == nil || entry.Candidate.ID == "" || entry.Candidate.Score < 80 {
+			return true
 		}
-		subs, err := searchProviderForMetadata(provider, meta)
-		if err != nil {
-			logf(opts, "[BAZARR] search failed for %s imdb=%s: %v", e.Name(), meta.ImdbID, err)
-			continue
+		ino := uint64(0)
+		if opts.InodeForPath != nil {
+			ino = opts.InodeForPath(virtPath)
 		}
-		for _, sub := range subs {
-			name := VirtualSRTName(e.Name(), sub)
-			if name == "" || seen[name] {
-				continue
-			}
-			seen[name] = true
-			virtPath := filepath.Join(dir, name)
-			entry := &Subtitle{
-				Name:      name,
-				Dir:       dir,
-				VideoPath: videoPath,
-				Candidate: sub,
-				Provider:  provider,
-				DestPath:  DestPath(virtPath),
-				done:      make(chan struct{}),
-				goFunc:    opts.Go,
-			}
-			virtualSRTCache.Store(virtPath, entry)
-			ino := uint64(0)
-			if opts.InodeForPath != nil {
-				ino = opts.InodeForPath(virtPath)
-			}
-			out = append(out, fuse.DirEntry{
-				Name: name,
-				Mode: syscall.S_IFREG,
-				Ino:  ino,
-				Off:  uint64(startOffset + len(out) + 1),
-			})
-		}
+		out = append(out, fuse.DirEntry{Name: filepath.Base(virtPath), Mode: syscall.S_IFREG, Ino: ino})
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	for i := range out {
+		out[i].Off = uint64(startOffset + i + 1)
 	}
 	return out
 }
 
-func searchProviderForMetadata(provider SubtitleProvider, meta *vfs.FileMetadata) ([]SubtitleCandidate, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	mediaID := meta.RadarrID
-	if mediaID == 0 {
-		mediaID = meta.SonarrEpisodeID
+func Lookup(dir, name string, opts Options) (*Subtitle, bool) {
+	if opts.Provider == nil || !opts.Provider.IsEnabled() {
+		return nil, false
 	}
-	title := meta.ImdbID
-	if title == "" {
-		title = filepath.Base(meta.Path)
+	val, ok := virtualSRTCache.Load(filepath.Join(dir, name))
+	if !ok {
+		return nil, false
 	}
-	return provider.Search(ctx, mediaID, title, VirtualLanguage)
+	entry, ok := val.(*Subtitle)
+	if !ok || entry == nil || entry.Candidate.ID == "" || entry.Candidate.Score < 80 {
+		return nil, false
+	}
+	return entry, true
 }
 
-func Lookup(dir, name string, opts Options) (*Subtitle, bool) {
-	if val, ok := virtualSRTCache.Load(filepath.Join(dir, name)); ok {
-		entry, ok := val.(*Subtitle)
-		return entry, ok
+func DiscoverVirtualSubtitles(ctx context.Context, store *metadb.DB, provider SubtitleProvider, opts Options) {
+	if store == nil || provider == nil || !provider.IsEnabled() {
+		return
 	}
-	for _, e := range Entries(dir, 0, opts) {
-		if e.Name == name {
-			if val, ok := virtualSRTCache.Load(filepath.Join(dir, name)); ok {
-				entry, ok := val.(*Subtitle)
-				return entry, ok
-			}
+	if opts.Provider == nil {
+		opts.Provider = provider
+	}
+	if existing, err := store.ListVirtualSubtitles(ctx, VirtualLanguage); err == nil {
+		for _, rec := range existing {
+			cachePersistedSubtitle(rec, provider, opts)
+		}
+	} else {
+		logf(opts, "[BAZARR] list persisted virtual subtitles failed: %v", err)
+	}
+	media, err := store.ListARRMediaMissingVirtualSubtitles(ctx, VirtualLanguage)
+	if err != nil {
+		logf(opts, "[BAZARR] list media missing virtual subtitles failed: %v", err)
+		return
+	}
+	for _, item := range media {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if item.ID <= 0 || item.Path == "" {
+			continue
+		}
+		searchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		var subs []SubtitleCandidate
+		var searchErr error
+		switch item.MediaType {
+		case "movie":
+			subs, searchErr = provider.SearchMovie(searchCtx, int(item.ID), VirtualLanguage)
+		case "episode":
+			subs, searchErr = provider.SearchEpisode(searchCtx, int(item.ID), VirtualLanguage)
+		}
+		cancel()
+		if searchErr != nil {
+			logf(opts, "[BAZARR] discovery search failed for %s id=%d path=%s: %v", item.MediaType, item.ID, filepath.Base(item.Path), searchErr)
+			continue
+		}
+		best, ok := bestSubtitle(subs)
+		if !ok {
+			continue
+		}
+		rec := metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, SubtitleID: best.ID, Provider: best.ReleaseGroup, Score: float64(best.Score)}
+		if rec.Provider == "" {
+			rec.Provider = "Bazarr"
+		}
+		if err := store.UpsertVirtualSubtitle(ctx, rec); err != nil {
+			logf(opts, "[BAZARR] persist virtual subtitle failed for %s: %v", filepath.Base(item.Path), err)
+			continue
+		}
+		cacheSubtitleForMedia(item.Path, best, provider, opts)
+	}
+}
+
+func bestSubtitle(subs []SubtitleCandidate) (SubtitleCandidate, bool) {
+	var best SubtitleCandidate
+	for _, sub := range subs {
+		if sub.ID == "" || sub.Score < 80 {
+			continue
+		}
+		if best.ID == "" || sub.Score > best.Score {
+			best = sub
 		}
 	}
-	return nil, false
+	return best, best.ID != ""
+}
+
+func cachePersistedSubtitle(rec metadb.VirtualSubtitle, provider SubtitleProvider, opts Options) {
+	if rec.MediaPath == "" || rec.SubtitleID == "" || rec.Score < 80 {
+		return
+	}
+	cacheSubtitleForMedia(rec.MediaPath, SubtitleCandidate{ID: rec.SubtitleID, Title: strings.TrimSuffix(filepath.Base(rec.MediaPath), filepath.Ext(rec.MediaPath)), ReleaseGroup: rec.Provider, Score: int(rec.Score), Language: rec.Language}, provider, opts)
+}
+
+func cacheSubtitleForMedia(videoPath string, sub SubtitleCandidate, provider SubtitleProvider, opts Options) {
+	name := VirtualSRTName(filepath.Base(videoPath), sub)
+	if name == "" {
+		return
+	}
+	dir := filepath.Dir(videoPath)
+	virtPath := filepath.Join(dir, name)
+	virtualSRTCache.Store(virtPath, &Subtitle{Name: name, Dir: dir, VideoPath: videoPath, Candidate: sub, Provider: provider, DestPath: DestPath(virtPath), done: make(chan struct{}), goFunc: opts.Go})
 }
 
 func VirtualSRTName(videoName string, sub SubtitleCandidate) string {

@@ -194,6 +194,17 @@ CREATE TABLE IF NOT EXISTS arr_media (
 );
 CREATE INDEX IF NOT EXISTS idx_arr_media_type ON arr_media(media_type);
 CREATE INDEX IF NOT EXISTS idx_arr_media_series ON arr_media(series_id);
+
+CREATE TABLE IF NOT EXISTS virtual_subtitles (
+    media_path TEXT PRIMARY KEY,
+    language TEXT NOT NULL,
+    subtitle_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    score REAL NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_virtual_subtitles_language ON virtual_subtitles(language);
+
 CREATE TABLE IF NOT EXISTS metadata_failures (
     hash       TEXT PRIMARY KEY,
     fail_count INTEGER NOT NULL DEFAULT 0,

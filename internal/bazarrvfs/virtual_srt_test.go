@@ -8,15 +8,29 @@ import (
 )
 
 type mockSubtitleProvider struct {
-	enabled     bool
-	candidates  []SubtitleCandidate
-	searchMedia int
-	searchTitle string
+	enabled         bool
+	candidates      []SubtitleCandidate
+	searchMedia     int
+	searchTitle     string
+	movieSearches   int
+	episodeSearches int
 }
 
 func (m *mockSubtitleProvider) Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error) {
 	m.searchMedia = mediaID
 	m.searchTitle = title
+	return m.candidates, nil
+}
+
+func (m *mockSubtitleProvider) SearchMovie(ctx context.Context, radarrID int, language string) ([]SubtitleCandidate, error) {
+	m.movieSearches++
+	m.searchMedia = radarrID
+	return m.candidates, nil
+}
+
+func (m *mockSubtitleProvider) SearchEpisode(ctx context.Context, episodeID int, language string) ([]SubtitleCandidate, error) {
+	m.episodeSearches++
+	m.searchMedia = episodeID
 	return m.candidates, nil
 }
 
@@ -28,42 +42,37 @@ func (m *mockSubtitleProvider) IsEnabled() bool { return m.enabled }
 
 func (m *mockSubtitleProvider) UpdateConfig(BazarrConfig) {}
 
-func TestEntriesSynthesizesSubtitleNode(t *testing.T) {
+func TestEntriesUsesOnlyVirtualSRTCache(t *testing.T) {
 	ClearCache()
 	dir := t.TempDir()
-	mkvPath := filepath.Join(dir, "Movie.Title.2024-GROUP.mkv")
-	metadata := `{"url":"http://example.invalid/movie.mkv","size":104857600,"imdb":"tt1234567","radarr_id":42}`
-	if err := os.WriteFile(mkvPath, []byte(metadata), 0644); err != nil {
-		t.Fatal(err)
+	provider := &mockSubtitleProvider{enabled: true, candidates: []SubtitleCandidate{{ID: "sub-1", Score: 97}}}
+	opts := Options{Provider: provider, InodeForPath: func(string) uint64 { return 123 }}
+
+	if entries := Entries(dir, 0, opts); len(entries) != 0 {
+		t.Fatalf("expected no entries without cached subtitle, got %d", len(entries))
+	}
+	if provider.movieSearches != 0 || provider.episodeSearches != 0 || provider.searchMedia != 0 {
+		t.Fatalf("Entries must not search provider: %#v", provider)
 	}
 
-	provider := &mockSubtitleProvider{
-		enabled: true,
-		candidates: []SubtitleCandidate{{
-			ID:           "sub-1",
-			Title:        "Movie Title",
-			ReleaseGroup: "GROUP",
-			Score:        97,
-			Language:     "pt-BR",
-		}},
-	}
-	opts := Options{Provider: provider, InodeForPath: func(string) uint64 { return 123 }}
+	videoPath := filepath.Join(dir, "Movie.Title.2024-GROUP.mkv")
+	cacheSubtitleForMedia(videoPath, SubtitleCandidate{ID: "sub-1", Title: "Movie Title", ReleaseGroup: "GROUP", Score: 97, Language: "pt-BR"}, provider, opts)
 
 	entries := Entries(dir, 0, opts)
 	if len(entries) != 1 {
-		t.Fatalf("expected 1 virtual subtitle entry, got %d", len(entries))
+		t.Fatalf("expected 1 cached virtual subtitle entry, got %d", len(entries))
 	}
 	wantName := "Movie.Title.GROUP-97%.pt-BR.srt"
 	if entries[0].Name != wantName {
 		t.Fatalf("expected virtual subtitle name %q, got %q", wantName, entries[0].Name)
 	}
-	if provider.searchMedia != 42 {
-		t.Fatalf("expected provider search to receive radarr id 42, got %d", provider.searchMedia)
+	if provider.movieSearches != 0 || provider.episodeSearches != 0 {
+		t.Fatalf("Entries must not search provider, movie=%d episode=%d", provider.movieSearches, provider.episodeSearches)
 	}
 
 	entry, ok := Lookup(dir, wantName, opts)
 	if !ok || entry == nil {
-		t.Fatalf("expected lookup to resolve synthesized subtitle")
+		t.Fatalf("expected lookup to resolve cached subtitle")
 	}
 }
 

@@ -65,6 +65,28 @@ func (r *RuntimeProvider) Search(ctx context.Context, mediaID int, title string,
 	return p.Search(ctx, mediaID, title, language)
 }
 
+// SearchMovie delegates to the active provider.
+func (r *RuntimeProvider) SearchMovie(ctx context.Context, radarrID int, language string) ([]SubtitleCandidate, error) {
+	r.mu.RLock()
+	p := r.provider
+	r.mu.RUnlock()
+	if p == nil {
+		return nil, nil
+	}
+	return p.SearchMovie(ctx, radarrID, language)
+}
+
+// SearchEpisode delegates to the active provider.
+func (r *RuntimeProvider) SearchEpisode(ctx context.Context, episodeID int, language string) ([]SubtitleCandidate, error) {
+	r.mu.RLock()
+	p := r.provider
+	r.mu.RUnlock()
+	if p == nil {
+		return nil, nil
+	}
+	return p.SearchEpisode(ctx, episodeID, language)
+}
+
 // Download delegates to the active provider.
 func (r *RuntimeProvider) Download(ctx context.Context, subtitleID string, destPath string) error {
 	r.mu.RLock()

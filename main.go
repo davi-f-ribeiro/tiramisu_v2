@@ -5390,6 +5390,13 @@ func main() {
 
 	logger.Printf("FUSE mounted at %s with VirtualMkvRoot, all systems active", mount)
 
+	safeGo(func() {
+		bazarrvfs.DiscoverVirtualSubtitles(context.Background(), stateDB, bazarrProviderRuntime, bazarrVFSOptions(bazarrProviderRuntime))
+		if globalDirCache != nil {
+			globalDirCache.Delete(source)
+		}
+	})
+
 	go smbdWatchdog()
 	go ttffCleanupLoop()
 

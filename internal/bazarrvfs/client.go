@@ -32,6 +32,8 @@ type SubtitleCandidate struct {
 // SubtitleProvider is the Bazarr provider contract used by the FUSE layer.
 type SubtitleProvider interface {
 	Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error)
+	SearchMovie(ctx context.Context, radarrID int, language string) ([]SubtitleCandidate, error)
+	SearchEpisode(ctx context.Context, episodeID int, language string) ([]SubtitleCandidate, error)
 	Download(ctx context.Context, subtitleID string, destPath string) error
 	IsEnabled() bool
 	UpdateConfig(BazarrConfig)
@@ -104,18 +106,17 @@ func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, la
 	}
 	var lastErr error
 	if mediaID > 0 {
-		for _, path := range []string{
-			"/api/providers/movies?radarrid=" + url.QueryEscape(strconv.Itoa(mediaID)),
-			"/api/providers/episodes?episodeid=" + url.QueryEscape(strconv.Itoa(mediaID)),
-		} {
-			subs, err := c.getProviderSubtitles(ctx, path, language)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			if len(subs) > 0 {
-				return limitCandidates(subs, cfg.MaxResults), nil
-			}
+		subs, err := c.SearchMovie(ctx, mediaID, language)
+		if err != nil {
+			lastErr = err
+		} else if len(subs) > 0 {
+			return subs, nil
+		}
+		subs, err = c.SearchEpisode(ctx, mediaID, language)
+		if err != nil {
+			lastErr = err
+		} else if len(subs) > 0 {
+			return subs, nil
 		}
 	}
 	if imdbID := normalizeIMDbID(title); imdbID != "" {
@@ -123,11 +124,11 @@ func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, la
 		if err != nil {
 			lastErr = err
 		} else if radarrID > 0 {
-			subs, err := c.getProviderSubtitles(ctx, "/api/providers/movies?radarrid="+url.QueryEscape(strconv.Itoa(radarrID)), language)
+			subs, err := c.SearchMovie(ctx, radarrID, language)
 			if err != nil {
 				lastErr = err
 			} else if len(subs) > 0 {
-				return limitCandidates(subs, cfg.MaxResults), nil
+				return subs, nil
 			}
 		}
 	}
@@ -135,6 +136,36 @@ func (c *BazarrClient) Search(ctx context.Context, mediaID int, title string, la
 		return nil, lastErr
 	}
 	return nil, nil
+}
+
+func (c *BazarrClient) SearchMovie(ctx context.Context, radarrID int, language string) ([]SubtitleCandidate, error) {
+	cfg, _ := c.snapshot()
+	if !cfg.Enabled || cfg.URL == "" {
+		return nil, c.disabledError()
+	}
+	if radarrID <= 0 {
+		return nil, nil
+	}
+	subs, err := c.getProviderSubtitles(ctx, "/api/providers/movies?radarrid="+url.QueryEscape(strconv.Itoa(radarrID)), language)
+	if err != nil {
+		return nil, err
+	}
+	return limitCandidates(subs, cfg.MaxResults), nil
+}
+
+func (c *BazarrClient) SearchEpisode(ctx context.Context, episodeID int, language string) ([]SubtitleCandidate, error) {
+	cfg, _ := c.snapshot()
+	if !cfg.Enabled || cfg.URL == "" {
+		return nil, c.disabledError()
+	}
+	if episodeID <= 0 {
+		return nil, nil
+	}
+	subs, err := c.getProviderSubtitles(ctx, "/api/providers/episodes?episodeid="+url.QueryEscape(strconv.Itoa(episodeID)), language)
+	if err != nil {
+		return nil, err
+	}
+	return limitCandidates(subs, cfg.MaxResults), nil
 }
 
 // SearchByIMDb resolves the movie in Bazarr and searches configured providers.

@@ -188,3 +188,92 @@ func (d *DB) UpsertARRMediaTMDB(ctx context.Context, mediaID, tmdbID int64, year
 	}
 	return nil
 }
+
+// ARRMediaForSubtitleDiscovery is a movie or episode that still needs a virtual subtitle row.
+type ARRMediaForSubtitleDiscovery struct {
+	ID        int64
+	MediaType string
+	Title     string
+	Path      string
+}
+
+// VirtualSubtitle is the persisted virtual .srt selection for one media file.
+type VirtualSubtitle struct {
+	MediaPath  string
+	Language   string
+	SubtitleID string
+	Provider   string
+	Score      float64
+}
+
+// UpsertVirtualSubtitle inserts or updates the persisted virtual subtitle selection.
+func (d *DB) UpsertVirtualSubtitle(ctx context.Context, rec VirtualSubtitle) error {
+	_, err := d.db.ExecContext(ctx, `INSERT INTO virtual_subtitles
+		(media_path, language, subtitle_id, provider, score, updated_at)
+	VALUES ($1, $2, $3, $4, $5, datetime('now'))
+	ON CONFLICT(media_path) DO UPDATE SET
+		language = EXCLUDED.language,
+		subtitle_id = EXCLUDED.subtitle_id,
+		provider = EXCLUDED.provider,
+		score = EXCLUDED.score,
+		updated_at = datetime('now')`, rec.MediaPath, rec.Language, rec.SubtitleID, rec.Provider, rec.Score)
+	if err != nil {
+		return fmt.Errorf("metadb: upsert virtual subtitle: %w", err)
+	}
+	return nil
+}
+
+// GetVirtualSubtitle returns the persisted virtual subtitle selection for a media path/language.
+func (d *DB) GetVirtualSubtitle(ctx context.Context, mediaPath, language string) (*VirtualSubtitle, error) {
+	row := d.db.QueryRowContext(ctx, `SELECT media_path, language, subtitle_id, provider, score
+		FROM virtual_subtitles WHERE media_path = $1 AND language = $2`, mediaPath, language)
+	var rec VirtualSubtitle
+	if err := row.Scan(&rec.MediaPath, &rec.Language, &rec.SubtitleID, &rec.Provider, &rec.Score); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("metadb: get virtual subtitle: %w", err)
+	}
+	return &rec, nil
+}
+
+// ListARRMediaMissingVirtualSubtitles returns movie/episode rows without a virtual subtitle record.
+func (d *DB) ListARRMediaMissingVirtualSubtitles(ctx context.Context, language string) ([]ARRMediaForSubtitleDiscovery, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT a.id, a.media_type, a.title, a.path
+		FROM arr_media a
+		LEFT JOIN virtual_subtitles v ON v.media_path = a.path AND v.language = $1
+		WHERE a.media_type IN ('movie', 'episode') AND v.media_path IS NULL
+		ORDER BY a.id`, language)
+	if err != nil {
+		return nil, fmt.Errorf("metadb: list media missing virtual subtitles: %w", err)
+	}
+	defer rows.Close()
+	var out []ARRMediaForSubtitleDiscovery
+	for rows.Next() {
+		var rec ARRMediaForSubtitleDiscovery
+		if err := rows.Scan(&rec.ID, &rec.MediaType, &rec.Title, &rec.Path); err != nil {
+			return nil, fmt.Errorf("metadb: scan media missing virtual subtitles: %w", err)
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+// ListVirtualSubtitles returns all persisted virtual subtitle selections for a language.
+func (d *DB) ListVirtualSubtitles(ctx context.Context, language string) ([]VirtualSubtitle, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT media_path, language, subtitle_id, provider, score
+		FROM virtual_subtitles WHERE language = $1 ORDER BY media_path`, language)
+	if err != nil {
+		return nil, fmt.Errorf("metadb: list virtual subtitles: %w", err)
+	}
+	defer rows.Close()
+	var out []VirtualSubtitle
+	for rows.Next() {
+		var rec VirtualSubtitle
+		if err := rows.Scan(&rec.MediaPath, &rec.Language, &rec.SubtitleID, &rec.Provider, &rec.Score); err != nil {
+			return nil, fmt.Errorf("metadb: scan virtual subtitle: %w", err)
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
