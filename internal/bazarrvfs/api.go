@@ -1,4 +1,4 @@
-package bazarr
+package bazarrvfs
 
 import (
 	"context"
@@ -107,7 +107,7 @@ func RegisterConfigAPI(mux *http.ServeMux, opts ConfigAPIOptions) {
 				opts.Store(&cfg)
 			}
 			if opts.Runtime != nil {
-				opts.Runtime.UpdateConfig(toSubproviderConfig(cfg.Bazarr))
+				opts.Runtime.UpdateConfig(cfg.Bazarr)
 			}
 			if opts.After != nil {
 				opts.After(cfg)

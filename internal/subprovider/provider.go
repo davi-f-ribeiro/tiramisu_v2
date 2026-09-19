@@ -1,7 +1,6 @@
 package subprovider
 
 import (
-	"context"
 	"sync"
 )
 
@@ -25,24 +24,6 @@ type Subtitle struct {
 	ReleaseInfo  string      // release string from provider (YTS, BLURAY, WEB-DL …)
 	VideoHash    string      // SubDB MD5 hash of video
 	Score        int         // 0–100, higher = better match
-}
-
-// SubtitleCandidate is the lightweight candidate shape used by virtual .srt stubs.
-type SubtitleCandidate struct {
-	ID           string
-	Title        string
-	ReleaseGroup string
-	Score        int
-	Language     string
-	DownloadURL  string
-}
-
-// SubtitleProvider is the runtime interface used by FUSE virtual subtitle stubs.
-type SubtitleProvider interface {
-	Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error)
-	Download(ctx context.Context, subtitleID string, destPath string) error
-	IsEnabled() bool
-	UpdateConfig(BazarrConfig)
 }
 
 // Result is what the Engine returns through its channel after searching + downloading.

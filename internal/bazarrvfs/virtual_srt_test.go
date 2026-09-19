@@ -5,18 +5,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"tiramisu/internal/subprovider"
 )
 
 type mockSubtitleProvider struct {
 	enabled     bool
-	candidates  []subprovider.SubtitleCandidate
+	candidates  []SubtitleCandidate
 	searchMedia int
 	searchTitle string
 }
 
-func (m *mockSubtitleProvider) Search(ctx context.Context, mediaID int, title string, language string) ([]subprovider.SubtitleCandidate, error) {
+func (m *mockSubtitleProvider) Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error) {
 	m.searchMedia = mediaID
 	m.searchTitle = title
 	return m.candidates, nil
@@ -28,7 +26,7 @@ func (m *mockSubtitleProvider) Download(ctx context.Context, subtitleID string, 
 
 func (m *mockSubtitleProvider) IsEnabled() bool { return m.enabled }
 
-func (m *mockSubtitleProvider) UpdateConfig(subprovider.BazarrConfig) {}
+func (m *mockSubtitleProvider) UpdateConfig(BazarrConfig) {}
 
 func TestEntriesSynthesizesSubtitleNode(t *testing.T) {
 	ClearCache()
@@ -41,7 +39,7 @@ func TestEntriesSynthesizesSubtitleNode(t *testing.T) {
 
 	provider := &mockSubtitleProvider{
 		enabled: true,
-		candidates: []subprovider.SubtitleCandidate{{
+		candidates: []SubtitleCandidate{{
 			ID:           "sub-1",
 			Title:        "Movie Title",
 			ReleaseGroup: "GROUP",
@@ -73,7 +71,7 @@ func TestHandleReturnsDummyBeforeDownloadCompletes(t *testing.T) {
 	entry := &Subtitle{
 		Name:      "dummy.srt",
 		Dir:       t.TempDir(),
-		Candidate: subprovider.SubtitleCandidate{ID: "sub-1"},
+		Candidate: SubtitleCandidate{ID: "sub-1"},
 		Provider:  &mockSubtitleProvider{enabled: false},
 		done:      make(chan struct{}),
 	}

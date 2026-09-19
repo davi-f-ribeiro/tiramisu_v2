@@ -15,7 +15,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	"tiramisu/internal/subprovider"
 	"tiramisu/internal/vfs"
 )
 
@@ -25,7 +24,7 @@ var DummySRT = []byte("1\n00:00:00,000 --> 00:00:01,000\nLegenda sendo preparada
 var virtualSRTCache sync.Map // full virtual path -> *Subtitle
 
 type Options struct {
-	Provider     subprovider.SubtitleProvider
+	Provider     SubtitleProvider
 	InodeForPath func(string) uint64
 	Go           func(func())
 	Logf         func(string, ...any)
@@ -35,8 +34,8 @@ type Subtitle struct {
 	Name      string
 	Dir       string
 	VideoPath string
-	Candidate subprovider.SubtitleCandidate
-	Provider  subprovider.SubtitleProvider
+	Candidate SubtitleCandidate
+	Provider  SubtitleProvider
 	DestPath  string
 	goFunc    func(func())
 
@@ -226,7 +225,7 @@ func Entries(dir string, startOffset int, opts Options) []fuse.DirEntry {
 	return out
 }
 
-func searchProviderForMetadata(provider subprovider.SubtitleProvider, meta *vfs.FileMetadata) ([]subprovider.SubtitleCandidate, error) {
+func searchProviderForMetadata(provider SubtitleProvider, meta *vfs.FileMetadata) ([]SubtitleCandidate, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	mediaID := meta.RadarrID
@@ -256,7 +255,7 @@ func Lookup(dir, name string, opts Options) (*Subtitle, bool) {
 	return nil, false
 }
 
-func VirtualSRTName(videoName string, sub subprovider.SubtitleCandidate) string {
+func VirtualSRTName(videoName string, sub SubtitleCandidate) string {
 	base := strings.TrimSuffix(videoName, filepath.Ext(videoName))
 	if sub.Title != "" {
 		base = sub.Title

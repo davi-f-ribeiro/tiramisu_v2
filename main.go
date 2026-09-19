@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 	"tiramisu/internal/arr"
-	"tiramisu/internal/bazarr"
 	"tiramisu/internal/bazarrvfs"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
@@ -487,7 +486,7 @@ func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 type VirtualMkvRoot struct {
 	fs.Inode
 	sourcePath       string
-	subtitleProvider subprovider.SubtitleProvider
+	subtitleProvider bazarrvfs.SubtitleProvider
 }
 
 // Compile-time interface checks - verificano che implementiamo correttamente le interfacce
@@ -692,10 +691,10 @@ func (r *VirtualMkvRoot) Statfs(ctx context.Context, out *fuse.StatfsOut) syscal
 type VirtualDirNode struct {
 	fs.Inode
 	physicalPath     string // Path fisico della directory (es. /mnt/torrserver/movies)
-	subtitleProvider subprovider.SubtitleProvider
+	subtitleProvider bazarrvfs.SubtitleProvider
 }
 
-func bazarrVFSOptions(provider subprovider.SubtitleProvider) bazarrvfs.Options {
+func bazarrVFSOptions(provider bazarrvfs.SubtitleProvider) bazarrvfs.Options {
 	return bazarrvfs.Options{
 		Provider:     provider,
 		InodeForPath: getFileInodeFromMap,
@@ -4384,7 +4383,7 @@ func main() {
 	}
 
 	globalConfig.Store(&cfg)
-	bazarrProviderRuntime := bazarr.NewRuntimeProvider(gc().Bazarr)
+	bazarrProviderRuntime := bazarrvfs.NewRuntimeProvider(gc().Bazarr)
 	subprovider.SetAppVersion(AppVersion)
 	subprovider.SetLogger(logger)
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
@@ -4838,7 +4837,7 @@ func main() {
 			oldSubAPIKey := gc().Subtitle.APIKey
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
-			bazarrProviderRuntime.Set(bazarr.NewSubtitleProvider(gc().Bazarr))
+			bazarrProviderRuntime.UpdateConfig(gc().Bazarr)
 			bazarrvfs.ClearCache()
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 
@@ -4930,7 +4929,7 @@ func main() {
 		}
 	})
 
-	bazarr.RegisterConfigAPI(http.DefaultServeMux, bazarr.ConfigAPIOptions{
+	bazarrvfs.RegisterConfigAPI(http.DefaultServeMux, bazarrvfs.ConfigAPIOptions{
 		Runtime: bazarrProviderRuntime,
 		Get:     gc,
 		Store: func(cfg *config.Config) {

@@ -1,4 +1,4 @@
-package subprovider
+package bazarrvfs
 
 import (
 	"context"

@@ -1,4 +1,4 @@
-package bazarr
+package bazarrvfs
 
 import (
 	"encoding/json"

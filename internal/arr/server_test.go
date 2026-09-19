@@ -426,6 +426,41 @@ func TestSeriesDetail404(t *testing.T) {
 	}
 }
 
+func TestARRCollectionContractUsesLiteralEmptyArrays(t *testing.T) {
+	store := newMockStore()
+	store.series[1] = &SonarrSeries{ID: 1, Title: "Show", Path: "/data/show"}
+	store.movies[1] = &RadarrMovie{ID: 1, Title: "Movie", Path: "/data/movie"}
+	h := NewHandler(store)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	for _, path := range []string{"/api/v3/series", "/api/v3/movie"} {
+		t.Run(path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var rows []map[string]json.RawMessage
+			if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+				t.Fatalf("decode %s: %v; body=%s", path, err, w.Body.String())
+			}
+			if len(rows) != 1 {
+				t.Fatalf("rows = %d, want 1", len(rows))
+			}
+			for _, key := range []string{"alternateTitles", "alternativeTitles"} {
+				raw, ok := rows[0][key]
+				if !ok {
+					t.Fatalf("%s missing from %s: %s", key, path, w.Body.String())
+				}
+				if string(raw) != "[]" {
+					t.Fatalf("%s = %s in %s, want literal []", key, raw, path)
+				}
+			}
+		})
+	}
+}
+
 func TestSonarrSeriesPayloadAlwaysIncludesAlternateTitlesArray(t *testing.T) {
 	store := newMockStore()
 	store.series[7] = &SonarrSeries{ID: 7, Title: "The Series", TvdbID: 777, Path: "/data/shows/series"}

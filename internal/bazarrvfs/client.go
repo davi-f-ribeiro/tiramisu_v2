@@ -1,4 +1,4 @@
-package subprovider
+package bazarrvfs
 
 import (
 	"context"
@@ -12,15 +12,29 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	cfgpkg "tiramisu/internal/config"
 )
 
-// BazarrConfig holds the Bazarr connection configuration.
-type BazarrConfig struct {
-	Enabled        bool
-	URL            string
-	APIKey         string
-	TimeoutSeconds int
-	MaxResults     int
+// BazarrConfig is the application config contract loaded from config.json.
+type BazarrConfig = cfgpkg.BazarrConfig
+
+// SubtitleCandidate is the provider result consumed by virtual .srt synthesis.
+type SubtitleCandidate struct {
+	ID           string
+	Title        string
+	ReleaseGroup string
+	Score        int
+	Language     string
+	DownloadURL  string
+}
+
+// SubtitleProvider is the Bazarr provider contract used by the FUSE layer.
+type SubtitleProvider interface {
+	Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error)
+	Download(ctx context.Context, subtitleID string, destPath string) error
+	IsEnabled() bool
+	UpdateConfig(BazarrConfig)
 }
 
 // BazarrClient is a small HTTP client for Bazarr-compatible APIs.

@@ -1,49 +1,38 @@
-package bazarr
+package bazarrvfs
 
 import (
 	"context"
 	"sync"
 
 	cfgpkg "tiramisu/internal/config"
-	"tiramisu/internal/subprovider"
 )
 
 // RuntimeProvider is a thread-safe, hot-swappable SubtitleProvider wrapper.
 type RuntimeProvider struct {
 	mu       sync.RWMutex
-	provider subprovider.SubtitleProvider
+	provider SubtitleProvider
 }
 
 // NewRuntimeProvider creates a provider from config and wraps it for hot reloads.
 func NewRuntimeProvider(cfg cfgpkg.BazarrConfig) *RuntimeProvider {
-	client := subprovider.NewBazarrClient(toSubproviderConfig(cfg))
+	client := NewBazarrClient(cfg)
 	return &RuntimeProvider{provider: client}
 }
 
 // NewSubtitleProvider builds the concrete Bazarr provider from application config.
-func NewSubtitleProvider(cfg cfgpkg.BazarrConfig) subprovider.SubtitleProvider {
-	return subprovider.NewBazarrClient(toSubproviderConfig(cfg))
-}
-
-func toSubproviderConfig(cfg cfgpkg.BazarrConfig) subprovider.BazarrConfig {
-	return subprovider.BazarrConfig{
-		Enabled:        cfg.Enabled,
-		URL:            cfg.URL,
-		APIKey:         cfg.APIKey,
-		TimeoutSeconds: cfg.TimeoutSeconds,
-		MaxResults:     cfg.MaxResults,
-	}
+func NewSubtitleProvider(cfg cfgpkg.BazarrConfig) SubtitleProvider {
+	return NewBazarrClient(cfg)
 }
 
 // Set replaces the active provider.
-func (r *RuntimeProvider) Set(p subprovider.SubtitleProvider) {
+func (r *RuntimeProvider) Set(p SubtitleProvider) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.provider = p
 }
 
 // UpdateConfig hot-reloads the active provider in place when possible.
-func (r *RuntimeProvider) UpdateConfig(cfg subprovider.BazarrConfig) {
+func (r *RuntimeProvider) UpdateConfig(cfg BazarrConfig) {
 	if r == nil {
 		return
 	}
@@ -54,7 +43,7 @@ func (r *RuntimeProvider) UpdateConfig(cfg subprovider.BazarrConfig) {
 		p.UpdateConfig(cfg)
 		return
 	}
-	r.Set(subprovider.NewBazarrClient(cfg))
+	r.Set(NewBazarrClient(cfg))
 }
 
 // IsEnabled reports whether the active provider is configured and enabled.
@@ -66,7 +55,7 @@ func (r *RuntimeProvider) IsEnabled() bool {
 }
 
 // Search delegates to the active provider.
-func (r *RuntimeProvider) Search(ctx context.Context, mediaID int, title string, language string) ([]subprovider.SubtitleCandidate, error) {
+func (r *RuntimeProvider) Search(ctx context.Context, mediaID int, title string, language string) ([]SubtitleCandidate, error) {
 	r.mu.RLock()
 	p := r.provider
 	r.mu.RUnlock()
