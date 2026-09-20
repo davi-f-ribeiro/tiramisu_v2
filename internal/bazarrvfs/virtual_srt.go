@@ -21,7 +21,6 @@ import (
 
 const VirtualLanguage = "pt-BR"
 const discoveryRequestInterval = time.Second
-const discoveryRetryInterval = 30 * time.Second
 
 var DummySRT = []byte("1\n00:00:00,000 --> 00:00:01,000\nLegenda sendo preparada pelo Tiramisu.\n\n")
 var virtualSRTCache sync.Map // full virtual path -> *Subtitle
@@ -284,32 +283,6 @@ func DiscoverVirtualSubtitles(ctx context.Context, store *metadb.DB, provider Su
 		}
 	}
 	return false
-}
-
-func DiscoverVirtualSubtitlesWithRetry(ctx context.Context, store *metadb.DB, provider SubtitleProvider, opts Options) {
-	for attempt := 1; attempt <= 10; attempt++ {
-		if !DiscoverVirtualSubtitles(ctx, store, provider, opts) {
-			return
-		}
-		if attempt == 10 {
-			break
-		}
-		if !sleepDiscoveryRetry(ctx) {
-			return
-		}
-	}
-	logf(opts, "[BAZARR] servidor inacessível após 10 tentativas, descoberta adiada para próximo ciclo")
-}
-
-func sleepDiscoveryRetry(ctx context.Context) bool {
-	t := time.NewTimer(discoveryRetryInterval)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
 }
 
 func sleepDiscovery(ctx context.Context) {

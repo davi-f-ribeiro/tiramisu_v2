@@ -5391,7 +5391,23 @@ func main() {
 	logger.Printf("FUSE mounted at %s with VirtualMkvRoot, all systems active", mount)
 
 	safeGo(func() {
-		bazarrvfs.DiscoverVirtualSubtitlesWithRetry(context.Background(), stateDB, bazarrProviderRuntime, bazarrVFSOptions(bazarrProviderRuntime))
+		ctx := context.Background()
+		for attempt := 1; attempt <= 10; attempt++ {
+			if !bazarrvfs.DiscoverVirtualSubtitles(ctx, stateDB, bazarrProviderRuntime, bazarrVFSOptions(bazarrProviderRuntime)) {
+				break
+			}
+			if attempt == 10 {
+				logger.Printf("[BAZARR] servidor inacessível após 10 tentativas, descoberta adiada para próximo ciclo")
+				break
+			}
+			t := time.NewTimer(30 * time.Second)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
+			case <-t.C:
+			}
+		}
 		if globalDirCache != nil {
 			globalDirCache.Delete(source)
 		}
