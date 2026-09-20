@@ -20,6 +20,7 @@ import (
 )
 
 const VirtualLanguage = "pt-BR"
+const discoveryRequestInterval = time.Second
 
 var DummySRT = []byte("1\n00:00:00,000 --> 00:00:01,000\nLegenda sendo preparada pelo Tiramisu.\n\n")
 var virtualSRTCache sync.Map // full virtual path -> *Subtitle
@@ -252,6 +253,10 @@ func DiscoverVirtualSubtitles(ctx context.Context, store *metadb.DB, provider Su
 		}
 		best, ok := bestSubtitle(subs)
 		if !ok {
+			if err := store.UpsertVirtualSubtitle(ctx, metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, Provider: "none", Score: 0}); err != nil {
+				logf(opts, "[BAZARR] persist virtual subtitle miss failed for %s: %v", filepath.Base(item.Path), err)
+			}
+			sleepDiscovery(ctx)
 			continue
 		}
 		rec := metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, SubtitleID: best.ID, Provider: best.ReleaseGroup, Score: float64(best.Score)}
@@ -263,6 +268,16 @@ func DiscoverVirtualSubtitles(ctx context.Context, store *metadb.DB, provider Su
 			continue
 		}
 		cacheSubtitleForMedia(item.Path, best, provider, opts)
+		sleepDiscovery(ctx)
+	}
+}
+
+func sleepDiscovery(ctx context.Context) {
+	t := time.NewTimer(discoveryRequestInterval)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
 }
 

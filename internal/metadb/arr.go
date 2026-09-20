@@ -242,7 +242,8 @@ func (d *DB) ListARRMediaMissingVirtualSubtitles(ctx context.Context, language s
 	rows, err := d.db.QueryContext(ctx, `SELECT a.id, a.media_type, a.title, a.path
 		FROM arr_media a
 		LEFT JOIN virtual_subtitles v ON v.media_path = a.path AND v.language = $1
-		WHERE a.media_type IN ('movie', 'episode') AND v.media_path IS NULL
+		WHERE a.media_type IN ('movie', 'episode')
+		  AND (v.media_path IS NULL OR (v.subtitle_id = '' AND v.updated_at <= datetime('now', '-24 hours')))
 		ORDER BY a.id`, language)
 	if err != nil {
 		return nil, fmt.Errorf("metadb: list media missing virtual subtitles: %w", err)

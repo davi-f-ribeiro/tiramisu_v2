@@ -56,3 +56,28 @@ func TestVirtualSubtitlesPersistence(t *testing.T) {
 		t.Fatalf("expected no missing media after subtitle, got %#v", missing)
 	}
 }
+
+func TestVirtualSubtitleNegativeCacheSuppressesRediscovery(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "tiramisu.db"), &testLogger{})
+	if err != nil {
+		t.Fatalf("new db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	moviePath := "/data/movies/Missing Movie (2024)/Missing Movie (2024).mkv"
+	if err := db.UpsertARRMovie(ctx, 12345, "tt7654321", "Missing Movie", "Missing Movie 2024", 2024, moviePath, 1000); err != nil {
+		t.Fatalf("upsert arr movie: %v", err)
+	}
+	if err := db.UpsertVirtualSubtitle(ctx, VirtualSubtitle{MediaPath: moviePath, Language: "pt-BR", Provider: "none", Score: 0}); err != nil {
+		t.Fatalf("upsert negative virtual subtitle: %v", err)
+	}
+
+	missing, err := db.ListARRMediaMissingVirtualSubtitles(ctx, "pt-BR")
+	if err != nil {
+		t.Fatalf("list missing after negative cache: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("expected recent negative cache to suppress rediscovery, got %#v", missing)
+	}
+}
