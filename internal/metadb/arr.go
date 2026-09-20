@@ -278,3 +278,13 @@ func (d *DB) ListVirtualSubtitles(ctx context.Context, language string) ([]Virtu
 	}
 	return out, rows.Err()
 }
+
+// DeleteVirtualSubtitleMisses removes negative discovery cache rows.
+func (d *DB) DeleteVirtualSubtitleMisses(ctx context.Context) (int64, error) {
+	res, err := d.db.ExecContext(ctx, `DELETE FROM virtual_subtitles WHERE provider = 'none' AND subtitle_id = ''`)
+	if err != nil {
+		return 0, fmt.Errorf("metadb: delete virtual subtitle misses: %w", err)
+	}
+	rows, _ := res.RowsAffected()
+	return rows, nil
+}

@@ -2,14 +2,18 @@ package bazarrvfs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"tiramisu/internal/metadb"
 )
 
 type mockSubtitleProvider struct {
 	enabled         bool
 	candidates      []SubtitleCandidate
+	searchErr       error
 	searchMedia     int
 	searchTitle     string
 	movieSearches   int
@@ -25,13 +29,13 @@ func (m *mockSubtitleProvider) Search(ctx context.Context, mediaID int, title st
 func (m *mockSubtitleProvider) SearchMovie(ctx context.Context, radarrID int, language string) ([]SubtitleCandidate, error) {
 	m.movieSearches++
 	m.searchMedia = radarrID
-	return m.candidates, nil
+	return m.candidates, m.searchErr
 }
 
 func (m *mockSubtitleProvider) SearchEpisode(ctx context.Context, episodeID int, language string) ([]SubtitleCandidate, error) {
 	m.episodeSearches++
 	m.searchMedia = episodeID
-	return m.candidates, nil
+	return m.candidates, m.searchErr
 }
 
 func (m *mockSubtitleProvider) Download(ctx context.Context, subtitleID string, destPath string) error {
@@ -92,5 +96,38 @@ func TestHandleReturnsDummyBeforeDownloadCompletes(t *testing.T) {
 	}
 	if res == nil || res.Size() == 0 {
 		t.Fatalf("expected dummy subtitle bytes")
+	}
+}
+
+func TestDiscoverAbortsOnProviderErrorWithoutNegativeCache(t *testing.T) {
+	ClearCache()
+	db, err := metadb.New(filepath.Join(t.TempDir(), "tiramisu.db"), nil)
+	if err != nil {
+		t.Fatalf("new db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	firstPath := filepath.Join(t.TempDir(), "One.mkv")
+	secondPath := filepath.Join(t.TempDir(), "Two.mkv")
+	if err := db.UpsertARRMovie(ctx, 1, "tt0000001", "One", "One", 2024, firstPath, 1000); err != nil {
+		t.Fatalf("upsert first: %v", err)
+	}
+	if err := db.UpsertARRMovie(ctx, 2, "tt0000002", "Two", "Two", 2024, secondPath, 1000); err != nil {
+		t.Fatalf("upsert second: %v", err)
+	}
+
+	provider := &mockSubtitleProvider{enabled: true, searchErr: errors.New("connection refused")}
+	DiscoverVirtualSubtitles(ctx, db, provider, Options{Provider: provider})
+
+	if provider.movieSearches != 1 {
+		t.Fatalf("expected discovery to abort after first provider error, got %d movie searches", provider.movieSearches)
+	}
+	misses, err := db.ListVirtualSubtitles(ctx, VirtualLanguage)
+	if err != nil {
+		t.Fatalf("list virtual subtitles: %v", err)
+	}
+	if len(misses) != 0 {
+		t.Fatalf("provider error must not persist negative cache, got %#v", misses)
 	}
 }

@@ -216,6 +216,11 @@ func DiscoverVirtualSubtitles(ctx context.Context, store *metadb.DB, provider Su
 	if opts.Provider == nil {
 		opts.Provider = provider
 	}
+	if n, err := store.DeleteVirtualSubtitleMisses(ctx); err == nil && n > 0 {
+		logf(opts, "[BAZARR] removed %d stale virtual subtitle miss records", n)
+	} else if err != nil {
+		logf(opts, "[BAZARR] cleanup virtual subtitle misses failed: %v", err)
+	}
 	if existing, err := store.ListVirtualSubtitles(ctx, VirtualLanguage); err == nil {
 		for _, rec := range existing {
 			cachePersistedSubtitle(rec, provider, opts)
@@ -229,46 +234,53 @@ func DiscoverVirtualSubtitles(ctx context.Context, store *metadb.DB, provider Su
 		return
 	}
 	for _, item := range media {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if item.ID <= 0 || item.Path == "" {
-			continue
-		}
-		searchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		var subs []SubtitleCandidate
-		var searchErr error
-		switch item.MediaType {
-		case "movie":
-			subs, searchErr = provider.SearchMovie(searchCtx, int(item.ID), VirtualLanguage)
-		case "episode":
-			subs, searchErr = provider.SearchEpisode(searchCtx, int(item.ID), VirtualLanguage)
-		}
-		cancel()
-		if searchErr != nil {
-			logf(opts, "[BAZARR] discovery search failed for %s id=%d path=%s: %v", item.MediaType, item.ID, filepath.Base(item.Path), searchErr)
-			continue
-		}
-		best, ok := bestSubtitle(subs)
-		if !ok {
-			if err := store.UpsertVirtualSubtitle(ctx, metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, Provider: "none", Score: 0}); err != nil {
-				logf(opts, "[BAZARR] persist virtual subtitle miss failed for %s: %v", filepath.Base(item.Path), err)
+		abort := false
+		func() {
+			defer sleepDiscovery(ctx)
+			select {
+			case <-ctx.Done():
+				abort = true
+				return
+			default:
 			}
-			sleepDiscovery(ctx)
-			continue
+			if item.ID <= 0 || item.Path == "" {
+				return
+			}
+			searchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			var subs []SubtitleCandidate
+			var searchErr error
+			switch item.MediaType {
+			case "movie":
+				subs, searchErr = provider.SearchMovie(searchCtx, int(item.ID), VirtualLanguage)
+			case "episode":
+				subs, searchErr = provider.SearchEpisode(searchCtx, int(item.ID), VirtualLanguage)
+			}
+			cancel()
+			if searchErr != nil {
+				logf(opts, "[BAZARR] servidor inacessível, adiando descoberta: %v", searchErr)
+				abort = true
+				return
+			}
+			best, ok := bestSubtitle(subs)
+			if !ok {
+				if err := store.UpsertVirtualSubtitle(ctx, metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, Provider: "none", Score: 0}); err != nil {
+					logf(opts, "[BAZARR] persist virtual subtitle miss failed for %s: %v", filepath.Base(item.Path), err)
+				}
+				return
+			}
+			rec := metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, SubtitleID: best.ID, Provider: best.ReleaseGroup, Score: float64(best.Score)}
+			if rec.Provider == "" {
+				rec.Provider = "Bazarr"
+			}
+			if err := store.UpsertVirtualSubtitle(ctx, rec); err != nil {
+				logf(opts, "[BAZARR] persist virtual subtitle failed for %s: %v", filepath.Base(item.Path), err)
+				return
+			}
+			cacheSubtitleForMedia(item.Path, best, provider, opts)
+		}()
+		if abort {
+			return
 		}
-		rec := metadb.VirtualSubtitle{MediaPath: item.Path, Language: VirtualLanguage, SubtitleID: best.ID, Provider: best.ReleaseGroup, Score: float64(best.Score)}
-		if rec.Provider == "" {
-			rec.Provider = "Bazarr"
-		}
-		if err := store.UpsertVirtualSubtitle(ctx, rec); err != nil {
-			logf(opts, "[BAZARR] persist virtual subtitle failed for %s: %v", filepath.Base(item.Path), err)
-			continue
-		}
-		cacheSubtitleForMedia(item.Path, best, provider, opts)
-		sleepDiscovery(ctx)
 	}
 }
 

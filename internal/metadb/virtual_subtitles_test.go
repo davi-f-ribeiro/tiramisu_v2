@@ -81,3 +81,33 @@ func TestVirtualSubtitleNegativeCacheSuppressesRediscovery(t *testing.T) {
 		t.Fatalf("expected recent negative cache to suppress rediscovery, got %#v", missing)
 	}
 }
+
+func TestDeleteVirtualSubtitleMisses(t *testing.T) {
+	db, err := New(filepath.Join(t.TempDir(), "tiramisu.db"), &testLogger{})
+	if err != nil {
+		t.Fatalf("new db: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.UpsertVirtualSubtitle(ctx, VirtualSubtitle{MediaPath: "/tmp/missing.mkv", Language: "pt-BR", Provider: "none", Score: 0}); err != nil {
+		t.Fatalf("upsert miss: %v", err)
+	}
+	if err := db.UpsertVirtualSubtitle(ctx, VirtualSubtitle{MediaPath: "/tmp/found.mkv", Language: "pt-BR", SubtitleID: "sub-1", Provider: "Bazarr", Score: 90}); err != nil {
+		t.Fatalf("upsert found: %v", err)
+	}
+	n, err := db.DeleteVirtualSubtitleMisses(ctx)
+	if err != nil {
+		t.Fatalf("delete misses: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 deleted miss, got %d", n)
+	}
+	rows, err := db.ListVirtualSubtitles(ctx, "pt-BR")
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	if len(rows) != 1 || rows[0].MediaPath != "/tmp/found.mkv" {
+		t.Fatalf("expected only found row to remain, got %#v", rows)
+	}
+}
